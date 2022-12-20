@@ -1,0 +1,1019 @@
+---
+title: "Fit models to biomass density and predict covariates"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  df_print: paged
+pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE, cache=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 12,
+  fig.asp = 0.618,
+  fig.align ='center'
+)
+```
+
+# TODO
+1. Fix pred grid and standardization to account for different sizes!
+
+# Intro
+In this script, I take the collated stomach data set and calculate aggregates (feeding ratio, total weight of prey groups) and predictor variables for diet data, aggregate to get 1 stomach = 1 row per prey type (not prey individual). I also select only the columns I need for model fitting, join environmental covariates and cpue covariates for cod and flounder, and lastly saduria biomass densities.
+
+## Load packages & source functions
+
+```{r load libraries, message=FALSE, warning=TRUE}
+# Load libraries, install if needed
+library(tidyverse)
+library(readxl)
+library(tidylog)
+library(RCurl)
+library(RColorBrewer)
+library(patchwork)
+library(janitor)
+library(forcats)
+library(gapminder)
+library(viridis)
+library(ggridges)
+library(raster)
+library(icesDatras)
+library(ggalluvial)
+library(ggrepel)
+library(ncdf4)
+library(chron)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(mapplots)
+library(geosphere)
+library(quantreg)
+library(brms)
+library(sdmTMB)
+options(mc.cores = parallel::detectCores()) 
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Source code for map plots
+# Source code for map plots
+source("/Users/maxlindmark/Dropbox/Max work/R/spatial_metabolic_index/R/functions/map_plot.R")
+
+plot_map_fc <- plot_map_fc + theme(legend.position = "bottom")
+
+theme_set(theme_plot())
+
+# Continuous colors
+options(ggplot2.continuous.colour = "viridis")
+
+# Discrete colors
+scale_colour_discrete <- function(...) {
+  scale_colour_brewer(palette = "Set2")
+}
+
+scale_fill_discrete <- function(...) {
+  scale_fill_brewer(palette = "Set2")
+}
+```
+
+## Read data
+
+```{r read data}
+# Load cache
+# qwraps2::lazyload_cache_dir(path = "R/01_sdm_mi_cache/html")
+
+pred_grid1 <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/cod_condition/master/data/for_analysis/pred_grid_(1_2).csv")
+pred_grid2 <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/cod_condition/master/data/for_analysis/pred_grid_(2_2).csv")
+
+pred_grid <- bind_rows(pred_grid1, pred_grid2)
+
+pred_grid <- pred_grid %>%
+  dplyr::select(-density_saduria, -biomass_spr, -biomass_her, -biomass_spr_sd, -biomass_her_sd, 
+                -density_cod, -density_fle, -depth_rec, -temp_rec, -oxy_rec, -density_cod_rec, 
+                -density_cod_sd, -density_fle_sd, -density_fle_rec, -density_saduria_rec, 
+                -density_saduria_sd, -temp_sd, -oxy_sd) %>% 
+  drop_na(oxy, temp)
+
+cpue <- readr::read_csv("data/full_cpue_length_q1_q4.csv") %>%
+  janitor::clean_names() %>% 
+  rename(X = x,
+         Y = y) %>% 
+  filter(quarter %in% c(1, 4))
+
+# Match pred grid else we cannot predict later
+cpue <- cpue %>% filter(year %in% unique(pred_grid$year))
+pred_grid
+
+# Now scale variables in the cpue data by the mean and sd in the prediction grid
+# pred_grid$log_depth <- log(pred_grid$depth)
+# pred_grid$log_depth2 <- pred_grid$log_depth * pred_grid$log_depth
+# mean_depth <- mean(pred_grid$log_depth)
+# sd_depth <- sd(pred_grid$log_depth)
+# mean_depth2 <- mean(pred_grid$log_depth2)
+# sd_depth2 <- sd(pred_grid$log_depth2)
+```
+
+```{r}
+# Calculating a metabolic index
+
+# A_0 is the ratio of constant terms in the Arrhenius equations describing the rates of supply and demand
+# B is individual body size (g)
+# n is the allometric exponent (difference delta - epsilon)
+# E0 is the difference in temperature dependence of supply and demand
+# T is temperature in degrees Kelvin
+# Tref is an arbitrarily chosen reference temperature (15°C)
+# kb is Boltzmann’s constant (eV K−1).
+
+# Oxygen unit conversion: 1 ml/l = 103/22.391 = 44.661 μmol/l
+
+# Parameters from Deutsch et al 2015 Science Supp Fig. S2
+A_conc = 9.7*10^-15
+E_conc <- 0.72
+n <- -0.21
+Tref <- 273.15 + 10
+kb <- 0.000086173324
+
+pred_grid$T_K <- pred_grid$temp + 273.15
+pred_grid$oxy2 <- (pred_grid$oxy * 10^3) / 22.391
+pred_grid$phi <- A_conc*(2000^n)*(pred_grid$oxy2 / exp(-E_conc / (kb * pred_grid$T_K)))
+
+# Scale variables in data w.r.t. prediction grid
+mean_phi<- mean(pred_grid$phi)
+sd_phi <- sd(pred_grid$phi)
+
+mean_depth <- mean(pred_grid$depth)
+sd_depth <- sd(pred_grid$depth)
+
+mean_oxy <- mean(pred_grid$oxy)
+sd_oxy <- sd(pred_grid$oxy)
+
+mean_temp <- mean(pred_grid$temp)
+sd_temp <- sd(pred_grid$temp)
+
+# Calculate phi in data
+# Metabolic index in the data
+B_small_cod <- 0.01*median(filter(cpue, length_cm <= 30 & species == "cod")$length_cm)^3
+B_large_cod <- 0.01*median(filter(cpue, length_cm > 30 & species == "cod")$length_cm)^3
+
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
+cpue <- cpue %>% 
+  mutate(T_K = temp + 273.15,
+         oxy2 = oxy * (10^3) / 22.391,
+         size_cl = ifelse(length_cm > 30, "large", "small"),
+         phi = ifelse(size_cl == "large", 
+                      A_conc*(5000^n)*(oxy2 / exp(-E_conc / (kb * T_K))),
+                      A_conc*(30^n)*(oxy2 / exp(-E_conc / (kb * T_K)))))
+
+ggplot(cpue, aes(phi)) + geom_histogram() + facet_wrap(~size_cl, ncol = 1)
+
+cpue <- cpue %>%
+  mutate(
+         # log_depth = log(depth),
+         # log_depth2 = log_depth*log_depth,
+         # depth_sc = (log_depth - mean_depth) / sd_depth,
+         # depth_sc_sq = (log_depth2 - mean_depth2) / sd_depth2,
+         depth_sc = (depth - mean_depth) / sd_depth,
+         temp_sc = (temp - mean_temp) / sd_temp,
+         oxy_sc = (oxy - mean_oxy) / sd_oxy,
+         phi_sc = (phi - mean_phi) / sd_phi)
+```
+
+Use Essington data and fit mixed model, i.e., do not use Deutsch cod values straight off. Below I work with concentration instead of pressure, for simplicity, but will change later 
+
+```{r}
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/estimate_mi_parameters.R
+# Read data:
+library(rMR)
+
+kb <- 0.000086173324
+
+po2 <- read.csv("data/essington_pO2_extended.csv", sep = ";")
+
+po2$po2 <- NA
+
+spc_list <- unique(po2$spc)
+
+c_to_K <- function(x) x + 273.15
+
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(po2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(po2, spc == spc_list[i])
+  
+  tmp_dat$po2 <- DO.unit.convert(tmp_dat$lc50,
+                                 DO.units.in = tmp_dat$units[1],
+                                 DO.units.out = "PP",
+                                 bar.press = 1,
+                                 bar.units.in= "atm",
+                                 temp.C = tmp_dat$temp,
+                                 bar.units.out = "kpa",
+                                 salinity = tmp_dat$salinity[1],
+                                 salinity.units = "uS")
+  
+  po2$po2[spc_index] <- tmp_dat$po2
+  
+}
+
+po2$spc <- as.factor(po2$spc)
+nspc <- length(levels(po2$spc))
+
+tref <- 15
+po2$inv.temp <- (1 / kb)  * ( 1 / (po2$temp + 273.15) - 1 / (tref + 273.15))
+
+fit <- glmmTMB(-log(po2) ~ diag(1+inv.temp|spc) + log(b), data = po2,
+               family = gaussian(link = "identity"),
+               se = TRUE
+)
+
+fit2 <- glmmTMB(-log(po2) ~ (1|spc) + log(b) + inv.temp, data = po2,
+                family = gaussian(link = "identity"),
+                se = TRUE
+)
+
+AICmat <- c(AIC(fit), AIC(fit2))
+AICmat
+
+fixef(fit2)
+# Conditional model:
+# (Intercept)       log(b)     inv.temp  
+#    -0.05125     -0.28440      0.43290  
+# ranef(fit2)
+# $spc
+#               (Intercept)
+# AtlanticCod   -0.02088772
+
+# Cod intercept:
+cod_inter <- exp(fixef(fit2)$cond[1] + ranef(fit2)$cond$spc$`(Intercept)`[1])
+
+
+spc <- levels(po2$spc)
+n <- fixef(fit2)$cond[2]
+Eo <- fixef(fit2)$cond[3]
+Aospc_effects <- exp(fixef(fit2)$cond[1] + ranef(fit2)$cond$spc$`(Intercept)`)
+
+po2$bnpo2 <- log(po2$b^n * po2$po2)
+
+
+
+#species.names <- c("Atlantic cod", "Common eelpout", "Atlantic silverside", "N. swellfish", "Sablefish", "Sharpsnout sea bream", "Winter flounder")
+
+for (i in 1:length(spc)) po2$Ao[po2$spc == spc[i]] <- Aospc_effects[i]
+po2$Eo <- Eo
+
+po2$bnpo2hat <- with(po2, -Eo * inv.temp - log(Ao) )
+
+## TODO: Visualize fit for sablefish for range of temperatures observed in data
+new.dat <- data_frame(spc = "sablefish",
+                      b = 675,
+                      inv.temp =(1/kb) * seq(1/c_to_K(13.6) - 1/c_to_K(15),
+                                             1/c_to_K(2.98) - 1/c_to_K(15),
+                                             length.out = 10)
+)                        
+
+fitted <- predict(fit, newdata = new.dat)
+new.dat$po2 <- exp(-fitted)
+new.dat$Ao <- Aospc_effects[7] # 5 in essingtons code
+new.dat$Eo <- Eo
+new.dat$bnpo2hat <- with(new.dat, -Eo * inv.temp - log(Ao))
+
+# Plot
+ggplot(data = filter(po2, !spc %in% c("flounder", "plaice")), aes(x = inv.temp, y = (bnpo2), col = spc)) + 
+  geom_point(size = 3) +
+  geom_line(size = 1, aes(y = bnpo2hat)) + 
+  geom_line(data = new.dat, aes(x = inv.temp, y = bnpo2hat)) +
+  scale_color_brewer(palette = "Accent", name = "") +
+  #scale_color_brewer(palette = "Accent",name = "", labels = species_names) +
+  #scale_color_brewer(palette = "Set1", name = "") +
+  labs(x = bquote("Inverse Temperature"~(k[b]^{-1}~ (T^-1 - T[ref]^-1))), y = bquote('log'~(B^n~pO[2]))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank()) +
+  theme(axis.line = element_line(color = "black")) +
+  theme(axis.text = element_text(size = 12)) +
+  theme(axis.title= element_text(size = 14)) +
+  theme(legend.text= element_text(size = 10)) +
+  #theme(legend.position = c(0.8, 0.875))
+  theme(legend.position = "bottom") + 
+  theme(aspect.ratio = 1)
+
+
+# Ok, now do the same but change unit! See how it compares for cod based on Deutsch values
+
+# Finally, redo Essingtons plot for my 2 new species and in the new unit
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(po2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(po2, spc == spc_list[i])
+  
+  tmp_dat$po2 <- DO.unit.convert(tmp_dat$lc50,
+                                 DO.units.in = tmp_dat$units[1],
+                                 DO.units.out = "mg/L", # Essington uses PP
+                                 bar.press = 1,
+                                 bar.units.in= "atm",
+                                 temp.C = tmp_dat$temp,
+                                 bar.units.out = "kpa",
+                                 salinity = tmp_dat$salinity[1],
+                                 salinity.units = "uS")
+  
+  po2$po2[spc_index] <- tmp_dat$po2
+  
+}
+
+po2$spc <- as.factor(po2$spc)
+nspc <- length(levels(po2$spc))
+
+tref <- 15
+po2$inv.temp <- (1 / kb)  * ( 1 / (po2$temp + 273.15) - 1 / (tref + 273.15))
+
+fit2 <- glmmTMB(-log(po2) ~ (1|spc) + log(b) + inv.temp, data = po2,
+                family = gaussian(link = "identity"),
+                se = TRUE
+)
+
+# Now check the cod-specific intercept
+fixef(fit2)
+# Conditional model:
+# (Intercept)       log(b)     inv.temp  
+#      0.6922      -0.2855       0.2784  
+ranef(fit2)
+# $spc
+#               (Intercept)
+# AtlanticCod   -0.02420471
+
+cod_inter2 <- exp(fixef(fit2)$cond[1] + ranef(fit2)$cond$spc$`(Intercept)`[1])
+cod_inter2
+
+# Parameters from Deutsch et al 2015 Science Supp Fig. S2
+# I don't think this is centered... hence so small 
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
+A_conc = 9.7*10^-15
+
+# What do I need to check here... I want to see if the concentration based metabolic index from Deutsch et al (2015) is the same when I use Essingtons equation for Deutsch parameters (the only difference should be temperature).
+
+pred_grid$phi <- A_conc*(2000^n)*(pred_grid$oxy2 / exp(-E_conc / (kb * pred_grid$T_K)))
+
+  
+a <- 9.7*10^-15
+E <- 0.72
+Temp <- 283.15
+b <- 1000
+o2 <- (7 * 10^3) / 22.391 # 7 ml/L, common value. Convert to micro mol per liter (same as mg/L): https://www.unitsconverters.com/en/Micromol/L-To-Mg/Dl/Utu-6021-6020 
+n <- -0.2
+   
+phi_d <- a*(b^n)*(o2/(exp(-E/(kb*Temp)))) 
+phi_d
+
+# Now do Essington's version... (but which constant? Cod estimate from their mixed model but concentration unit? Not the same then! Maybe I test essing and deutsch using pressure values... still, intercept is not the same lol)
+  Ao <- 1.950318 # cod_inter2 # concentration intercept for cod
+  kelvin = 273.15
+  Temp2 <- 10
+  
+  inv.temp <- (1 / kb) * ( 1 / (Temp2 + kelvin) - 1 / (15 + kelvin)) # ref temp 10
+
+  -E * inv_temp - A
+  
+phi_e <- (b^n)*Ao*o2 *exp(E * inv.temp)
+phi_e
+  
+# This doesn't work. See if index in deutsch is the same as essing when using the pressure equation
+a <- 3.1*10^-14
+E <- 0.72
+Temp <- 283.15
+b <- 1000
+o2 <- 103 # No idea what the partial pressure should be. According to this site: https://www.loligosystems.com/convert-oxygen-units using partial pressure at 50 m according to this site: https://bluerobotics.com/learn/pressure-depth-calculator/, 7 mg /l corresponds to 103 partial pressure
+n <- -0.2
+   
+phi_d <- a*(b^n)*(o2/(exp(-E/(kb*Temp)))) 
+phi_d
+
+# Now do Essington:
+Ao <- 0.9304069  # cod_inter
+  
+phi_e <- (b^n)*Ao*o2 *exp(E * inv.temp)
+phi_e
+
+# Ok, it's difficult... What if I take the Deutsch index for concentraiton straight as it is, then do the same for Essington parameters and just see how they compare?
+
+
+# Parameters from Deutsch et al 2015 Science Supp Fig. S2
+A_conc = 9.7*10^-15
+E_conc <- 0.72
+n <- -0.21
+Tref <- 273.15 + 10
+kb <- 0.000086173324
+
+# Calculate phi in data
+# Metabolic index in the data
+B_small_cod <- 0.01*median(filter(cpue, length_cm <= 30 & species == "cod")$length_cm)^3
+# small_cod_geom_mean <- cpue %>% 
+#   filter(length_cm <= 30 & species == "cod") %>% 
+#   filter(length_cm > 0) %>% 
+#   summarise(geom_mean_weight = exp(mean(log(0.01*length_cm^3))))
+
+B_large_cod <- 0.01*median(filter(cpue, length_cm > 30 & species == "cod")$length_cm)^3
+
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
+cpue <- cpue %>% 
+  mutate(T_K = temp + 273.15,
+         oxy2 = oxy * (10^3) / 22.391,
+         size_cl = ifelse(length_cm > 30, "large", "small"),
+         phi = ifelse(size_cl == "large", 
+                      A_conc*(5000^n)*(oxy2 / exp(-E_conc / (kb * T_K))),
+                      A_conc*(30^n)*(oxy2 / exp(-E_conc / (kb * T_K)))))
+
+# Now do Essington (based on concentrations) and params from fit2
+  Eo <- 0.2784
+  #Eo <- 0.72
+  Ao <-  0.1422288 # 1.950318 is Cod inter 2. This intercept = -log(Ao)
+  #n <- -0.2855
+  n <- -0.21
+  kelvin = 273.15
+
+cpue <- cpue %>% 
+  mutate(inv.temp = (1 / kb) * ( 1 / (temp + kelvin) - 1 / (15 + kelvin)),
+         phi_es = ifelse(size_cl == "large", 
+                         5000^n*Ao*oxy2*exp(Eo * inv.temp),
+                         1000^n*Ao*oxy2*exp(Eo * inv.temp)))
+  
+ggplot(cpue) +
+  facet_wrap(~size_cl, ncol = 1, scales = "free_y") +
+  geom_histogram(aes(phi, fill = "deutsch_conc"), color = NA, alpha = 0.5) +
+  geom_histogram(aes(phi_es, fill = "essing_conc"), color = NA, alpha = 0.5)
+# This plot looks better if I divide essington intercept by 2.
+
+# Summary:
+# Ok this looks reasonable
+# What i need to understand now is the following:
+# According to Deutsch (2015) it doesn't really matter if I work with pressure or concentration. The parameters change, but they also cancel each other out sort of.
+# I want to use Essington's way of estimating things. He uses pressure though.
+# Is it OK to simply switch units of any variable related to oxygen (and which are those?)
+# How to find out: does the equation change? NO... Check the conversion to mg/L in the function: anything I need to sort out there?
+# Ultimate test: calculate some values in essingtons data, then refit the model with concentraton to get new pO2_crit values, convert data to concentration again then then calculate. Basically, do Deeutsch appendix plot with essing data.
+
+```
+
+## Summarise data
+
+```{r aggregate cpue per length to cpue per haul per size-class}
+# Summaries density by length group per haul
+cod_cpue <- cpue %>%
+  filter(species == "cod") %>%
+  mutate(size_group = ifelse(length_cm >= 30, "large", "small")) %>% 
+  group_by(haul_id, size_group) %>% 
+  summarise(density = sum(density)) %>% 
+  ungroup()
+
+  cod_cpue_small <- cod_cpue %>%
+    filter(size_group == "small") %>%
+    dplyr::select(-size_group) %>% 
+    rename(density_cod_small = density)
+
+  cod_cpue_large <- cod_cpue %>%
+    filter(size_group == "large") %>%
+    dplyr::select(-size_group) %>% 
+    rename(density_cod_large = density)
+
+fle_cpue <- cpue %>%
+  filter(species == "flounder") %>%
+  mutate(size_group = ifelse(length_cm >= 22, "large", "small")) %>% 
+  group_by(haul_id, size_group) %>% 
+  summarise(density = sum(density)) %>% 
+  ungroup()
+
+  fle_cpue_small <- fle_cpue %>%
+    filter(size_group == "small") %>%
+    dplyr::select(-size_group) %>% 
+    rename(density_fle_small = density)
+
+  fle_cpue_large <- fle_cpue %>%
+    filter(size_group == "large") %>%
+    dplyr::select(-size_group) %>% 
+    rename(density_fle_large = density)
+
+
+# Check 0 catches
+cod_cpue_small %>%
+  group_by(haul_id) %>%
+  summarise(haul_dens = sum(density_cod_small)) %>%
+  ungroup() %>%
+  filter(!haul_dens == 0)
+
+cod_cpue_large %>%
+  group_by(haul_id) %>%
+  summarise(haul_dens = sum(density_cod_large)) %>%
+  ungroup() %>%
+  filter(!haul_dens == 0)
+
+fle_cpue_small %>%
+  group_by(haul_id) %>%
+  summarise(haul_dens = sum(density_fle_small)) %>%
+  ungroup() %>%
+  filter(!haul_dens == 0)
+
+fle_cpue_large %>%
+  group_by(haul_id) %>%
+  summarise(haul_dens = sum(density_fle_large)) %>%
+  ungroup() %>%
+  filter(!haul_dens == 0)
+```
+
+```{r fit models and predict on stomach data}
+cod_cpue_small <- left_join(cod_cpue_small, 
+                            cpue %>%
+                              filter(species == "cod") %>% 
+                              distinct(haul_id, .keep_all = TRUE) %>%
+                              dplyr::select(haul_id, year, quarter, X, Y, oxy, temp, depth,
+                                             oxy_sc, temp_sc, depth_sc, phi, phi_sc)) %>% 
+  drop_na(phi)
+
+cod_cpue_large <- left_join(cod_cpue_large,
+                            cpue %>%
+                              filter(species == "cod") %>% 
+                              distinct(haul_id, .keep_all = TRUE) %>%
+                              dplyr::select(haul_id, year, quarter, X, Y, oxy, temp, depth,
+                                             oxy_sc, temp_sc, depth_sc, phi, phi_sc)) %>% 
+  drop_na(phi)
+
+fle_cpue_small <- left_join(fle_cpue_small, 
+                            cpue %>%
+                              filter(species == "flounder") %>% 
+                              distinct(haul_id, .keep_all = TRUE) %>%
+                              dplyr::select(haul_id, year, quarter, X, Y, oxy, temp, depth,
+                                             oxy_sc, temp_sc, depth_sc))
+
+fle_cpue_large <- left_join(fle_cpue_large,
+                            cpue %>%
+                              filter(species == "flounder") %>% 
+                              distinct(haul_id, .keep_all = TRUE) %>%
+                              dplyr::select(haul_id, year, quarter, X, Y, oxy, temp, depth,
+                                            oxy_sc, temp_sc, depth_sc))
+```
+
+## Fit models
+
+```{r make meshes}
+# Small cod
+spde_small_cod <- make_mesh(cod_cpue_small, xy_cols = c("X", "Y"),
+                            n_knots = 150, 
+                            type = "kmeans", seed = 42)
+
+
+# Large cod
+spde_large_cod <- make_mesh(cod_cpue_large, xy_cols = c("X", "Y"),
+                            n_knots = 150, 
+                            type = "kmeans", seed = 42)
+
+# Small flounder
+spde_small_fle <- make_mesh(fle_cpue_small, xy_cols = c("X", "Y"),
+                            n_knots = 150, 
+                            type = "kmeans", seed = 42)
+
+
+# Large flounder
+spde_large_fle <- make_mesh(fle_cpue_large, xy_cols = c("X", "Y"),
+                            n_knots = 150, 
+                            type = "kmeans", seed = 42)
+
+plot(spde_small_cod)
+plot(spde_large_cod)
+plot(spde_small_fle)
+plot(spde_large_fle)
+```
+
+Small cod
+
+```{r fit small cod model, cache=TRUE}
+# Small cod model
+mcod_s <- sdmTMB(density_cod_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + oxy_sc + temp_sc,
+                 data = cod_cpue_small,
+                 mesh = spde_small_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_s_v2 <- run_extra_optimization(mcod_s, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_s_v2)
+```
+
+```{r fit small cod model1, cache=TRUE}
+# Small cod model
+mcod_s1 <- sdmTMB(density_cod_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + breakpt(oxy_sc) + temp_sc,
+                 data = cod_cpue_small,
+                 mesh = spde_small_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_s1_v2 <- run_extra_optimization(mcod_s1, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_s1_v2)
+```
+
+```{r fit small cod model2, cache=TRUE}
+# Small cod model
+mcod_s2 <- sdmTMB(density_cod_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + oxy_sc * temp_sc,
+                 data = cod_cpue_small,
+                 mesh = spde_small_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_s2_v2 <- run_extra_optimization(mcod_s2, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_s2_v2)
+```
+
+```{r fit small cod model3, cache=TRUE}
+# Small cod model
+mcod_s3 <- sdmTMB(density_cod_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + breakpt(phi_sc),
+                 data = cod_cpue_small,
+                 mesh = spde_small_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_s3_v2 <- run_extra_optimization(mcod_s3, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_s3_v2)
+```
+
+```{r fit small cod model4, cache=TRUE}
+# Small cod model
+mcod_s4 <- sdmTMB(density_cod_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + s(phi_sc),
+                 data = cod_cpue_small,
+                 mesh = spde_small_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_s4_v2 <- run_extra_optimization(mcod_s4, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_s4_v2)
+```
+
+
+```{r}
+#mcmc_res_sc <- residuals(mcod_s_v2, type = "mle-mcmc", mcmc_iter = 201, mcmc_warmup = 200)
+#qqnorm(mcmc_res_sc);qqline(mcmc_res_sc)
+```
+
+Large cod
+
+```{r fit large cod model, cache=TRUE}
+# Large cod model
+mcod_l <- sdmTMB(density_cod_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + oxy_sc + temp_sc,
+                 data = cod_cpue_large,
+                 mesh = spde_large_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_l_v2 <- run_extra_optimization(mcod_l, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_l_v2)
+```
+
+```{r fit large cod model1, cache=TRUE}
+# Large cod model
+mcod_l1 <- sdmTMB(density_cod_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + breakpt(oxy_sc) + temp_sc,
+                 data = cod_cpue_large,
+                 mesh = spde_large_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_l1_v2 <- run_extra_optimization(mcod_l1, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_l1_v2)
+```
+
+```{r fit large cod model2, cache=TRUE}
+# Large cod model
+mcod_l2 <- sdmTMB(density_cod_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + oxy_sc*temp_sc,
+                 data = cod_cpue_large,
+                 mesh = spde_large_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_l2_v2 <- run_extra_optimization(mcod_l2, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_l2_v2)
+```
+
+```{r fit large cod model3, cache=TRUE}
+# Large cod model
+mcod_l3 <- sdmTMB(density_cod_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + breakpt(phi_sc),
+                 data = cod_cpue_large,
+                 mesh = spde_large_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_l3_v2 <- run_extra_optimization(mcod_l3, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_l3_v2)
+```
+
+```{r fit large cod model4, cache=TRUE}
+# Large cod model
+mcod_l4 <- sdmTMB(density_cod_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) + s(phi_sc),
+                 data = cod_cpue_large,
+                 mesh = spde_large_cod,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "off",
+                 spatial = "on",
+                 time = "year",
+                 reml = FALSE)
+
+mcod_l4_v2 <- run_extra_optimization(mcod_l4, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+sanity(mcod_l4_v2)
+```
+
+```{r}
+#mcmc_res_lc <- residuals(mcod_l_v2, type = "mle-mcmc", mcmc_iter = 201, mcmc_warmup = 200)
+#qqnorm(mcmc_res_lc);qqline(mcmc_res_lc)
+```
+
+Small flounder
+
+```{r fit small flounder model, cache=TRUE}
+# Small flounder model
+# mfle_s <- sdmTMB(density_fle_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) +
+#                    breakpt(oxy_sc) + temp_sc,
+#                  data = fle_cpue_small,
+#                  mesh = spde_small_fle,
+#                  family = tweedie(link = "log"),
+#                  spatiotemporal = "off",
+#                  spatial = "on",
+#                  time = "year",
+#                  reml = FALSE)
+# 
+# mfle_s_v2 <- run_extra_optimization(mfle_s, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r fit small flounder model2, cache=TRUE}
+# Small flounder model
+# mfle_s2 <- sdmTMB(density_fle_small ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) +
+#                    breakpt(oxy_sc) + temp_sc,
+#                  data = fle_cpue_small,
+#                  mesh = spde_small_fle,
+#                  family = tweedie(link = "log"),
+#                  spatiotemporal = "off",
+#                  spatial = "on",
+#                  time = "year",
+#                  reml = FALSE)
+# 
+# mfle_s2_v2 <- run_extra_optimization(mfle_s2, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+#mcmc_res_sf <- residuals(mfle_s_v2, type = "mle-mcmc", mcmc_iter = 201, mcmc_warmup = 200)
+#qqnorm(mcmc_res_sf);qqline(mcmc_res_sf)
+```
+
+Large flounder
+
+```{r fit large flounder model, cache=TRUE}
+# Large flounder model
+# mfle_l <- sdmTMB(density_fle_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) +
+#                    breakpt(oxy_sc) + temp_sc,
+#                  data = fle_cpue_large,
+#                  mesh = spde_large_fle,
+#                  family = tweedie(link = "log"),
+#                  spatiotemporal = "off",
+#                  spatial = "on",
+#                  time = "year",
+#                  reml = FALSE)
+# 
+# mfle_l_v2 <- run_extra_optimization(mfle_l, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r fit large flounder model2, cache=TRUE}
+# Large flounder model
+# mfle_l2 <- sdmTMB(density_fle_large ~ 0 + as.factor(quarter) + as.factor(year) + s(depth_sc) +
+#                    oxy_sc*temp_sc,
+#                  data = fle_cpue_large,
+#                  mesh = spde_large_fle,
+#                  family = tweedie(link = "log"),
+#                  spatiotemporal = "off",
+#                  spatial = "on",
+#                  time = "year",
+#                  reml = FALSE)
+# 
+# mfle_l2_v2 <- run_extra_optimization(mfle_l2, nlminb_loops = 1, newton_loops = 1)
+```
+
+```{r}
+#mcmc_res_lf <- residuals(mfle_l_v2, type = "mle-mcmc", mcmc_iter = 201, mcmc_warmup = 200)
+#qqnorm(mcmc_res_lf);qqline(mcmc_res_lf)
+```
+
+## Results
+### AIC
+```{r aic}
+AIC(mcod_s_v2, mcod_s1_v2, mcod_s2_v2, mcod_s3_v2, mcod_s4_v2)
+AIC(mcod_l_v2, mcod_l1_v2, mcod_l2_v2, mcod_l3_v2, mcod_l4_v2)
+```
+
+For both small and large cod, the smooth phi model is best
+
+```{r}
+ggplot(cod_cpue_large, aes(phi, density_cod_large)) + geom_point() + stat_smooth()
+ggplot(cod_cpue_small, aes(phi, density_cod_small)) + geom_point() + stat_smooth()
+
+tidy(mcod_l4_v2)
+tidy(mcod_s4_v2)
+
+large_pars <- tidy(mcod_l2_v2,
+                effects = "fixed", conf.int = TRUE) %>%
+  filter(!grepl('year', term)) %>%
+  filter(!grepl('quarter', term)) %>% 
+  mutate(size_cl = "Adult")
+
+small_pars <- tidy(mcod_s2_v2,
+                effects = "fixed", conf.int = TRUE) %>%
+  filter(!grepl('year', term)) %>%
+  filter(!grepl('quarter', term)) %>% 
+  mutate(size_cl = "Juvenile")
+
+coefs <- bind_rows(large_pars, small_pars)
+
+coefs <- coefs %>% 
+    mutate(term2 = term,
+           term2 = ifelse(term == "temp_sc", "Temperature", term2),
+           term2 = ifelse(term == "oxy_sc", "Oxygen", term2),
+           term2 = ifelse(term == "depth_sc", "Depth", term2),
+           term2 = ifelse(term == "oxy_sc:temp_sc", "Temperature x Oxygen", term2)
+           )
+
+coefs <- coefs %>% 
+    mutate(term2 = term,
+           term2 = ifelse(term == "temp_sc", "Temperature", term2),
+           term2 = ifelse(term == "oxy_sc", "Oxygen", term2),
+           term2 = ifelse(term == "depth_sc", "Depth", term2),
+           term2 = ifelse(term == "oxy_sc:temp_sc", "Temperature x Oxygen", term2)
+           )
+
+# Coefficients
+ggplot(coefs, aes(term2, estimate, color = size_cl)) +
+  geom_hline(yintercept = 0, linetype = 2, color = "gray50", size = 0.5) +
+  geom_point(size = 3, position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0, size = 1,
+                position = position_dodge(width = 0.2)) +
+  labs(x = "Predictor", y = "Standardized coefficient") +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  NULL 
+```
+
+### 2. Marginal effects plot
+
+Weird that it's unimodal and declines at high phi's. Maybe super coastal?
+
+```{r margin phi}
+# Marginal
+nd <- data.frame(
+  phi_sc = seq(min(cod_cpue_small$phi_sc) + 0.5,
+               max(cod_cpue_small$phi_sc) - 0.2, length.out = 100), 
+  year = 2015L,
+  quarter = 1,
+  oxy_sc = mean(cod_cpue_small$oxy_sc),
+  temp_sc = mean(cod_cpue_small$temp_sc),
+  depth_sc = mean(cod_cpue_small$depth_sc)
+)
+
+p_adu <- predict(mcod_l4_v2, newdata = nd, se_fit = TRUE, re_form = NA, xy_cols = c("X", "Y"))
+p_juv <- predict(mcod_s4_v2, newdata = nd, se_fit = TRUE, re_form = NA, xy_cols = c("X", "Y"))
+
+p <- bind_rows(p_adu %>% mutate(size_cl = "Adult"),
+               p_juv %>% mutate(size_cl = "Juvenile")) %>% 
+  mutate(phi = (phi_sc * sd_phi) + mean_phi)
+
+ggplot(p, aes(phi, exp(est), color = size_cl, fill = size_cl, 
+              ymin = exp(est - 1.96 * est_se), 
+              ymax = exp(est + 1.96 * est_se))) +
+  geom_line() +
+  geom_ribbon(alpha = 0.4, color = NA) + 
+  geom_vline(xintercept = 1, linetype = 2, color = "grey30") +
+  coord_cartesian(expand = 0) + 
+  scale_x_continuous(breaks = seq(-2, 40, by = 2))
+```
+
+3. Predictions on maps
+
+```{r map pred}
+
+pred_grid
+
+plot_map_fc + 
+  geom_raster(data = pred_grid, aes(X*1000, Y*1000, fill = phi)) + 
+  facet_wrap(~year) + 
+  scale_fill_viridis()
+```
+
+4. weighted phi by size group and year
+
+```{r weighted means}
+pred_grid <- pred_grid %>%
+  mutate(quarter = factor(4),
+         depth_sc = (depth - mean(depth)) / sd(depth),
+         phi_sc = (phi - mean(phi)) / sd(phi))
+
+large_pred <- predict(mcod_l4_v2, newdata = pred_grid)
+small_pred <- predict(mcod_s4_v2, newdata = pred_grid)
+
+# Small cod
+wm_phi_small <- small_pred %>%
+  group_by(year) %>%
+  summarise("Median" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.5)),
+            "1st quartile" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.25)),
+            "3rd quartile" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.75))) %>% 
+  ungroup() %>% 
+  mutate(group = "Juvenile") 
+
+# Large cod
+wm_phi_large <- large_pred %>%
+  group_by(year) %>%
+  summarise("Median" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.5)),
+            "1st quartile" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.25)),
+            "3rd quartile" = hutils::weighted_quantile(v = phi, w = exp(est), p = c(0.75))) %>% 
+  ungroup() %>% 
+  mutate(group = "Adult")
+
+env_phi <- pred_grid %>%
+  group_by(year) %>%
+  summarise("Median" = quantile(phi, p = c(0.5)),
+            "1st quartile" = quantile(phi, p = c(0.25)),
+            "3rd quartile" = quantile(phi, p = c(0.75))) %>% 
+  ungroup() %>% 
+  mutate(group = "Environment") 
+  
+phi_series <- bind_rows(wm_phi_small, wm_phi_large, env_phi)
+
+ggplot(phi_series, aes(year, Median, color = group, fill = group)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = `1st quartile`, ymax = `3rd quartile`), alpha = 0.2, color = NA) +
+  facet_wrap(~group) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  guides(fill = "none", color = "none") +
+  labs(y = "phi", x = "Year") +
+  theme_plot() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  NULL
+
+ggplot(phi_series, aes(year, Median, color = group)) +
+  geom_line() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  labs(y = "phi", x = "Year", color = "") +
+  theme_plot() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  NULL
+```
+
