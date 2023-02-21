@@ -50,6 +50,4 @@ data/ICES_StatRec_mapto_ICES_Areas
 data/NEMO_Nordic_SCOBI
 data/NEMO_Nordic_SCOBI
 
-!data/clean/
-data/clean/*
-!data/clean/catch_clean.csv
+data/clean/catch_by_length_q1_q4.csv
