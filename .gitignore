@@ -43,7 +43,14 @@ vignettes/*.pdf
 **.log
 
 # Data
-!data
-data/*
+data/DATRAS_exchange
+data/depth_geo_tif
+data/gear_standardization
+data/ICES_StatRec_mapto_ICES_Areas
+data/NEMO_Nordic_SCOBI
+data/NEMO_Nordic_SCOBI
+
+!data/clean/
+data/clean/*
 !data/clean/catch_clean.csv
 
