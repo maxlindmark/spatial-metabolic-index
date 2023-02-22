@@ -41,4 +41,4 @@
 115;8;18.5;pct;plaice;ScholzWaller1992;35;24;Lindmark;geometric mean weight based on length range with fishbase LW params
 203;8;39.7;pct;AtlanticCod;ScholzWaller1992;35;24;Lindmark;geometric mean weight based on length range with fishbase LW params
 90;8;20.9;pct;dab;ScholzWaller1992;35;24;Lindmark;geometric mean weight based on length range with fishbase LW params
-0.6;13;20;pct;flounder;Tallqvist1999;0.5;48;Lindmark;"weight of mean experimental size with fishbase LW params; **** This is too low because only 40% survive (not 50%) and that’s at 48 H. 50% survival is reached for 20% O2 after 29 h. "
+0.6;13;20;pct;flounder;Tallqvist1999;0.5;48;Lindmark;weight of mean experimental size with fishbase LW params. Lc50 too low because only 40% survive (not 50%) and that’s at 48 H. 50% survival is reached for 20% O2 after 29 h. 
