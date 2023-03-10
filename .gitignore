@@ -51,3 +51,6 @@ data/NEMO_Nordic_SCOBI
 data/NEMO_Nordic_SCOBI
 
 data/clean/catch_by_length_q1_q4.csv
+
+# Output
+output/
