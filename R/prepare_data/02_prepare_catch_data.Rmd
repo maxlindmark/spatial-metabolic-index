@@ -151,7 +151,7 @@ d_sum <- d %>%
   group_by(haul_id, species, life_stage) %>% 
   summarise(density = sum(density)) %>% 
   ungroup() %>% 
-  group_by(species) %>% 
+  group_by(species, life_stage) %>% 
   mutate(upr = quantile(density, probs = 0.999)) %>% # Remove some extreme values...
   ungroup() %>% 
   filter(density < upr) %>% 
