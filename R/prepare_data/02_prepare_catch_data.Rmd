@@ -27,6 +27,11 @@ library(devtools)
 library(nls.multstart)
 library(broom)
 library(nlstools)
+
+# Source code for plots
+source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+
+theme_set(theme_plot())
 ```
 
 ## Read data
@@ -42,6 +47,11 @@ plaice <- bits_ca %>%
   rename(age = Age) %>% 
   filter(age < 25)
 
+# Now I need to copy rows with NoAtLngt > 1 so that 1 row = 1 ind
+plaice <- plaice %>% map_df(., rep, .$CANoAtLngt)
+
+ggplot() +
+  geom_jitter(data = plaice, aes(factor(age), length_cm), alpha = 0.4, height = 0)
 
 # Fit VBGE models
 
@@ -58,16 +68,18 @@ fit <- nls_multstart(length_cm ~ VBGF(age, Linf, k),
 
 preds <- augment(fit)
 
-ggplot() +
-  geom_jitter(data = plaice, aes(age, length_cm), alpha = 0.4, height = 0) +
-  geom_line(data = preds, aes(age, .fitted), color = "tomato3", size = 1)
-
 # Size at age 2?
-predict(fit, new.data = data.frame(age = 2)) %>% 
-  as.data.frame() %>% 
-  summarise(pred = median(.),
-            lwr_pred = quantile(., probs = 0.025),
-            upr_pred = quantile(., probs = 0.975))
+# predict(fit, new.data = data.frame(age = 1)) %>% 
+#   as.data.frame() %>% 
+#   summarise(pred = mean(.),
+#             lwr_pred = quantile(., probs = 0.025),
+#             upr_pred = quantile(., probs = 0.975))
+
+ggplot() +
+  geom_jitter(data = plaice, aes(factor(age), length_cm), alpha = 0.4, height = 0) +
+  geom_line(data = preds, aes(age, .fitted), color = "tomato3", size = 1) + 
+  geom_hline(yintercept = 21, color = "tomato3") + 
+  geom_vline(xintercept = 2, color = "tomato3")
 ```
 
 ```{r, message=FALSE}
@@ -78,7 +90,7 @@ d <- d %>%
   mutate(maturation_size = NA,
          maturation_size = ifelse(species == "cod", 30, maturation_size), # Lindmark 2020, van Leeuven 2013
          maturation_size = ifelse(species == "flounder", 19, maturation_size), # Erlandsson 2017 (median L50)
-         maturation_size = ifelse(species == "plaice", 26, maturation_size), # Estimated above based on WGBFAS 50% of 2 year olds being mature
+         maturation_size = ifelse(species == "plaice", 21, maturation_size), # Estimated above based on WGBFAS 50% of 2 year olds being mature
          maturation_size = ifelse(species == "dab", 18, maturation_size)) %>% # Stock Annex: Dab (Limanda limanda) in subdivisions 22–32 (Baltic Sea)
   mutate(life_stage = ifelse(length_cm >= maturation_size, "adult", "juvenile"))
   
@@ -111,7 +123,7 @@ sizes <- sizes %>%
          mat_l = NA,
          mat_l = ifelse(species == "cod", 30, mat_l),
          mat_l = ifelse(species == "flounder", 19, mat_l),
-         mat_l = ifelse(species == "plaice", 26, mat_l),
+         mat_l = ifelse(species == "plaice", 21, mat_l),
          mat_l = ifelse(species == "dab", 18, mat_l),
          a = NA,
          a = ifelse(species == "cod", 0.008358197, a),
@@ -128,7 +140,7 @@ sizes <- sizes %>%
          max_w = a*max_l^b,
          juvenile = round((min_w * mat_w)^0.5, digits = -1),
          adult = round((mat_w * max_w)^0.5, digits = -1)) %>% 
-  dplyr::select(species, juvenile, adult, mat_w) %>% 
+  dplyr::select(species, juvenile, adult, mat_w, max_w) %>% 
   mutate(mat_w = round(mat_w, digits = -1)) %>% 
   pivot_longer(c(juvenile, adult), values_to = "B")
 
@@ -139,8 +151,15 @@ d_sum <- d %>%
   group_by(haul_id, species, life_stage) %>% 
   summarise(density = sum(density)) %>% 
   ungroup() %>% 
+  group_by(species) %>% 
+  mutate(upr = quantile(density, probs = 0.999)) %>% # Remove some extreme values...
+  ungroup() %>% 
+  filter(density < upr) %>% 
   mutate(group = paste(species, life_stage, sep = "_")) %>% 
-  dplyr::select(-life_stage, -species) %>% 
+  dplyr::select(-life_stage, -species, -upr)
+  
+# Make wide
+d_sum <- d_sum %>% 
   pivot_wider(names_from = group, values_from = density)
 
 # Now left join in all other information...
