@@ -125,11 +125,14 @@ o2$inv_temp <- (1 / kb)  * ( 1 / (o2$temp + 273.15) - 1 / (tref + 273.15))
 
 # Plot the data we want to fit
 o2 %>% 
-  pivot_longer(c(po2, o2)) %>% 
-  ggplot(aes(inv_temp, -log(value), color = spc)) + 
+  ggplot(aes(inv_temp, -log(po2), color = spc)) + 
   geom_point() + 
-  geom_smooth(aes(inv_temp, -log(value)), method = "lm", inherit.aes = FALSE) +
-  facet_wrap(~name, ncol = 1)
+  geom_smooth(aes(inv_temp, -log(po2)), method = "lm", inherit.aes = FALSE)
+
+o2 %>% 
+  ggplot(aes(inv_temp, -log(o2), color = spc)) + 
+  geom_point() + 
+  geom_smooth(aes(inv_temp, -log(o2)), method = "lm", inherit.aes = FALSE)
 
 o2 %>% 
   filter(spc %in% c("AtlanticCod", "plaice", "dab")) %>% 
@@ -168,7 +171,7 @@ res_o2 <- residuals(fit_o2)
 qqnorm(res_o2)
 qqline(res_o2)
 
-# Now we can mass and temperature correct (p)O2 in Baltic experiments
+# Now we can mass and temperature correct (p)O2 in Baltic experiments by using Essingtons Eq. 2., but re-arranging it so that we have log(Ao) on the LHS. I.e., by assuming that phi = 1 is equal to critical o2, and we have data for critical o2, we can calculate Ao from the other parameters
 fe_o2 <- tibble(term = names(fixef(fit_o2)$cond),
                 est = fixef(fit_o2)$cond) %>% 
   filter(term %in% c("log(b)", "inv_temp")) %>% 
@@ -187,7 +190,6 @@ o2_new <- o2 %>%
   filter(source == "Lindmark") %>% 
   dplyr::select(spc, b, inv_temp, temp, po2, o2)
 
-# Temperature and mass correct Baltic species critical oxygen using Essington Eq. 2 and the estimated parameters
 o2_new <- o2_new %>% 
   mutate(A0_o2 = exp(-fe_o2$E_o2*inv_temp - log(o2) -fe_o2$n_o2*log(b)),
          A0_po2 = exp(-fe_po2$E_po2*inv_temp - log(po2) -fe_po2$n_po2*log(b)))
@@ -237,6 +239,60 @@ mi_params
 write.csv(mi_params, "data/clean/mi_params.csv")
 ```
 
+# Plot the metabolic index over size
+
 ```{r}
-knitr::knit_exit()
+# Read size csv to calculate the metabolic index
+sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") %>% 
+  mutate(group = paste(species, name, sep = "_"))
+
+sizes
+
+# Make a df from min to mat and max size
+nd <- data.frame(species = rep(sizes$species, each = 50)) %>% 
+  mutate(b = NA, 
+         b = ifelse(species == "cod", seq(1, filter(sizes, species == "cod")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "dab", seq(1, filter(sizes, species == "dab")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "flounder", seq(1, filter(sizes, species == "flounder")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "plaice", seq(1, filter(sizes, species == "plaice")$mat_w[1], length.out = 50), b)) %>% 
+  left_join(mi_params) %>% 
+  mutate(phi = A0_o2*b^n_o2) # Calculate metabolic index over size for each species at T_ref at o2 = 1
+
+ggplot(nd, aes(b, phi, color = species)) + 
+  scale_color_brewer(palette = "Dark2") +
+  geom_line()
+
+# Now do for maturation size at a range of temperatures (fixed o2...)
+nd2 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
+                              temp = seq(10, 20, 0.2))) %>% 
+  mutate(inv_temp = (1 / kb)  * ( 1 / (temp + 273.15) - 1 / (tref + 273.15))) %>% 
+  left_join(sizes) %>% 
+  left_join(mi_params %>% dplyr::select(-temp), by = "species") %>% 
+  mutate(phi = (A0_o2*mat_w^n_o2) * exp(E_o2 * inv_temp)) # Calculate metabolic index over size for each species at T_ref at o2 = 1
+
+ggplot(nd2, aes(temp, phi, color = species)) + 
+  scale_color_brewer(palette = "Dark2") +
+  geom_line()
+
+# And lastly for the same size (10g)
+nd3 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
+                              temp = seq(10, 20, 0.2))) %>% 
+  mutate(inv_temp = (1 / kb)  * ( 1 / (temp + 273.15) - 1 / (tref + 273.15)),
+         b = 10) %>% 
+  left_join(mi_params %>% dplyr::select(-temp), by = "species") %>% 
+  mutate(phi = (A0_o2*b^n_o2) * exp(E_o2 * inv_temp)) # Calculate metabolic index over size for each species at T_ref at o2 = 1
+
+# Sdd winter flounder to compare? the reason is a question whether we should use flounder data because the sizes are extremely small and when we correct we find that flounder has the lowest phi of all, when in reality it's likely most tolerant to to low oxygen and temperature. We probably should expect it to be closer to plaice or winter flounder. If we use experimental data for dab, plaice and cod they all come from the same experiment, and that's a bonus... 
+wflounder <- data.frame(expand.grid(species = rep("winter_flounder", each = 50),
+                              temp = seq(10, 20, 0.2))) %>% 
+  mutate(inv_temp = (1 / kb)  * ( 1 / (temp + 273.15) - 1 / (tref + 273.15)),
+         b = 10) %>% 
+  mutate(phi = (filter(re_o2, spc == "wflounder")$A0_o2*b^mi_params$n_o2[1]) * exp(mi_params$E_o2[1] * inv_temp))
+
+nd4 <- bind_rows(nd3, wflounder)
+
+ggplot(nd4, aes(temp, phi, color = species)) + 
+  scale_color_brewer(palette = "Set1") +
+  geom_line()
 ```
+
