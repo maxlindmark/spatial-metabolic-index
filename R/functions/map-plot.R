@@ -1,5 +1,7 @@
 library(sf)
 
+sf::sf_use_s2(FALSE)
+
 # Specify map ranges
 ymin = 52; ymax = 60.5; xmin = 10; xmax = 24
 
@@ -15,7 +17,7 @@ swe_coast <- suppressWarnings(suppressMessages(
 
 # Transform our map into UTM 33 coordinates, which is the equal-area projection we fit in:
 utm_zone33 <- 32633
-swe_coast_proj <- sf::st_transform(swe_coast, crs = utm_zone33)
+swe_coast_proj <- sf::st_transform(swe_coast, crs = 32633)
 
 # Define plotting theme for main plot
 theme_plot <- function(base_size = 11, base_family = "") {
