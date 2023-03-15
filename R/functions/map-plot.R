@@ -1,7 +1,5 @@
 library(sf)
 
-sf::sf_use_s2(FALSE)
-
 # Specify map ranges
 ymin = 52; ymax = 60.5; xmin = 10; xmax = 24
 
