@@ -1658,10 +1658,8 @@ hlcodhaul <- hlcodL3 %>%
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
          cpue_un = CPUEun,
-         kg = cpue_kg * (HaulDur / 60),
-         abund = cpue * (HaulDur / 60),
-         density = kg/0.45,
-         density_ab = abund/0.45)
+         density = cpue_kg/0.45,
+         density_ab = cpue/0.45)
 
 # Flounder
 hlflehaul <- hlfleL3 %>%
@@ -1669,10 +1667,8 @@ hlflehaul <- hlfleL3 %>%
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
          cpue_un = CPUEun,
-         kg = cpue_kg * (HaulDur / 60),
-         abund = cpue * (HaulDur / 60),
-         density = kg/0.45,
-         density_ab = abund/0.45)
+         density = cpue_kg/0.45,
+         density_ab = cpue/0.45)
 
 # Plaice
 hlplahaul <- hlplaL3 %>%
@@ -1680,10 +1676,8 @@ hlplahaul <- hlplaL3 %>%
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
          cpue_un = CPUEun,
-         kg = cpue_kg * (HaulDur / 60),
-         abund = cpue * (HaulDur / 60),
-         density = kg/0.45,
-         density_ab = abund/0.45)
+         density = cpue_kg/0.45,
+         density_ab = cpue/0.45)
 
 # Dab
 hldabhaul <- hldabL3 %>%
@@ -1691,10 +1685,8 @@ hldabhaul <- hldabL3 %>%
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
          cpue_un = CPUEun,
-         kg = cpue_kg * (HaulDur / 60),
-         abund = cpue * (HaulDur / 60),
-         density = kg/0.45,
-         density_ab = abund/0.45)
+         density = cpue_kg/0.45,
+         density_ab = cpue/0.45)
 
 # First, figure out why I have length = 0 and density = 0 when I have other lengths in the haul
 hlcodhaul %>% filter(haul.id == "1993:1:GFR:SOL:H20:23:31") %>% as.data.frame()

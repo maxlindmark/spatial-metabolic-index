@@ -179,4 +179,3 @@ d_haul %>%
 # Save!
 write_csv(d_haul, "data/clean/catch_clean.csv")
 ```
-
