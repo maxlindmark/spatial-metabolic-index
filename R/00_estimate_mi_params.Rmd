@@ -242,6 +242,8 @@ write.csv(mi_params, "data/clean/mi_params.csv")
 # Plot the metabolic index over size
 
 ```{r}
+pal <- brewer.pal(name = "Dark2", n = 8)
+
 # Read size csv to calculate the metabolic index
 sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") %>% 
   mutate(group = paste(species, name, sep = "_"))
@@ -256,11 +258,22 @@ nd <- data.frame(species = rep(sizes$species, each = 50)) %>%
          b = ifelse(species == "flounder", seq(1, filter(sizes, species == "flounder")$mat_w[1], length.out = 50), b),
          b = ifelse(species == "plaice", seq(1, filter(sizes, species == "plaice")$mat_w[1], length.out = 50), b)) %>% 
   left_join(mi_params) %>% 
-  mutate(phi = A0_o2*b^n_o2) # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(phi = A0_o2*b^n_o2) %>% # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(species = str_to_title(species))
 
-ggplot(nd, aes(b, phi, color = species)) + 
-  scale_color_brewer(palette = "Dark2") +
-  geom_line()
+p1 <- ggplot(nd, aes(b, phi, color = species)) + 
+  scale_color_manual(values = rev(pal)) +
+  geom_line() +
+  labs(y = "Metabolic index (\u03C6)", x = "Body mass (g)", color = "") +
+  theme_plot() +
+  guides(color = "none") +
+  theme(aspect.ratio = 1,
+        legend.direction = "vertical",
+        legend.position = c(0.9, 0.9),
+        legend.background = element_rect(fill = NA),
+        legend.spacing.y = unit(0, 'cm'),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7))
 
 # Now do for maturation size at a range of temperatures (fixed o2...)
 nd2 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
@@ -268,11 +281,80 @@ nd2 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
   mutate(inv_temp = (1 / kb)  * ( 1 / (temp + 273.15) - 1 / (tref + 273.15))) %>% 
   left_join(sizes) %>% 
   left_join(mi_params %>% dplyr::select(-temp), by = "species") %>% 
-  mutate(phi = (A0_o2*mat_w^n_o2) * exp(E_o2 * inv_temp)) # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(phi = (A0_o2*mat_w^n_o2) * exp(E_o2 * inv_temp)) %>% # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(species = str_to_title(species))
 
-ggplot(nd2, aes(temp, phi, color = species)) + 
-  scale_color_brewer(palette = "Dark2") +
-  geom_line()
+p2 <- ggplot(nd2, aes(temp, phi, color = species)) + 
+  scale_color_manual(values = rev(pal)) +
+  geom_line() +
+  labs(y = "", x = "Temperature (°C)", color = "") +
+  theme_plot() +
+  theme(aspect.ratio = 1,
+        legend.direction = "vertical",
+        legend.background = element_rect(fill = NA),
+        legend.position = c(0.85, 0.9),
+        legend.spacing.y = unit(0, 'cm'),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7))
+
+p1 + p2
+
+## Make the same plot but now with flounder getting plaice parameters...
+# Make a df from min to mat and max size
+mi_pars2 <- mi_pars
+mi_pars2[4, c(4:5)] <- mi_pars2[1, c(4:5)]
+
+nd <- data.frame(species = rep(sizes$species, each = 50)) %>% 
+  mutate(b = NA, 
+         b = ifelse(species == "cod", seq(1, filter(sizes, species == "cod")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "dab", seq(1, filter(sizes, species == "dab")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "flounder", seq(1, filter(sizes, species == "flounder")$mat_w[1], length.out = 50), b),
+         b = ifelse(species == "plaice", seq(1, filter(sizes, species == "plaice")$mat_w[1], length.out = 50), b)) %>% 
+  left_join(mi_pars2) %>% 
+  mutate(phi = A0_o2*b^n_o2) %>% # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(species = str_to_title(species))
+
+p1 <- ggplot(nd, aes(b, phi, color = species, linetype = species)) + 
+  scale_color_manual(values = rev(pal)) +
+  geom_line(size = 0.9) +
+  labs(y = "Metabolic index (\u03C6)", x = "Body mass (g)", color = "") +
+  theme_plot() +
+  guides(color = "none", linetype = "none") +
+  theme(aspect.ratio = 1,
+        legend.direction = "vertical",
+        legend.position = c(0.9, 0.9),
+        legend.background = element_rect(fill = NA),
+        legend.spacing.y = unit(0, 'cm'),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7))
+
+# Now do for maturation size at a range of temperatures (fixed o2...)
+nd2 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
+                              temp = seq(10, 20, 0.2))) %>% 
+  mutate(inv_temp = (1 / kb)  * ( 1 / (temp + 273.15) - 1 / (tref + 273.15))) %>% 
+  left_join(sizes) %>% 
+  left_join(mi_pars2, by = "species") %>% 
+  mutate(phi = (A0_o2*mat_w^n_o2) * exp(E_o2 * inv_temp)) %>% # Calculate metabolic index over size for each species at T_ref at o2 = 1
+  mutate(species = str_to_title(species))
+
+p2 <- ggplot(nd2, aes(temp, phi, color = species, linetype = species)) + 
+  scale_color_manual(values = rev(pal)) +
+  geom_line(size = 0.9) +
+  labs(y = "", x = "Temperature (°C)", color = "") +
+  guides(linetype = "none") + 
+  theme_plot() +
+  theme(aspect.ratio = 1,
+        legend.direction = "vertical",
+        legend.background = element_rect(fill = NA),
+        legend.position = c(0.85, 0.9),
+        legend.spacing.y = unit(0, 'cm'),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7))
+
+p1 + p2
+
+ggsave("figures/mi_mass_temp.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+
 
 # And lastly for the same size (10g)
 nd3 <- data.frame(expand.grid(species = rep(sizes$species, each = 50),
