@@ -1,0 +1,440 @@
+---
+title: "Fit models with metabolic index and temperature velocities for each species"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  df_print: paged
+pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE, cache=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 12,
+  fig.asp = 0.618,
+  fig.align ='center'
+)
+```
+
+# Intro
+Main analysis: This scripts reads spatially referenced linear trends over time in biomass, metabolic index and temperature ("03_calculate_velocities.Rmd"), and fits spatial sdmTMB models to those
+
+```{r load libraries, message=FALSE, warning=TRUE}
+# Load libraries, install if needed
+library(tidyverse)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(sdmTMB)
+library(rMR)
+library(patchwork)
+library(raster)
+library(VoCC)
+library(RColorBrewer)
+library(viridis)
+library(ggh4x)
+library(ggridges)
+
+# Source code for plots
+source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+
+theme_set(theme_plot())
+
+pal <- brewer.pal(name = "Dark2", n = 8)
+```
+
+## Read and plot data
+
+```{r}
+# Read from GH?
+d <- read_csv("data/clean/velocities.csv") %>% 
+  mutate(quarter_f = as.factor(quarter))
+
+glimpse(d)
+
+# Biotic velocities
+plot_map + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = bio_vel)) + 
+  facet_grid(life_stage ~ species) + 
+  #scale_fill_viridis() + 
+  scale_fill_gradient2() + 
+  geom_sf(size = 0.3)
+
+# Phi velocities
+plot_map + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = phi_vel)) + 
+  facet_grid(life_stage ~ species) + 
+  #scale_fill_viridis() + 
+  scale_fill_gradient2() + 
+  geom_sf(size = 0.3)
+
+# Temperature velocities
+plot_map + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = temp_vel)) + 
+  facet_grid(life_stage ~ species) + 
+  #scale_fill_viridis() + 
+  scale_fill_gradient2() + 
+  geom_sf(size = 0.3)
+
+# Plot biotic vs phi and temperature velocities
+ggplot(d, aes(phi_vel, bio_vel)) + 
+  geom_point(alpha = 0.4) +
+  facet_grid(life_stage ~ species) + 
+  stat_smooth(method = "lm") +
+  theme(aspect.ratio = 1) +
+  NULL
+
+ggplot(d, aes(temp_vel, bio_vel)) + 
+  geom_point(alpha = 0.4) +
+  facet_grid(life_stage ~ species) + 
+  stat_smooth(method = "lm") +
+  theme(aspect.ratio = 1) +
+  NULL
+
+# Only cod
+head(d) %>% as.data.frame()
+
+d_cod <- d %>% 
+  filter(group == "cod_adult")
+
+p1 <- plot_map + 
+  geom_raster(data = d_cod, aes(X*1000, Y*1000, fill = bio_vel)) + 
+  scale_fill_gradient2(name = "Biotic velocity") + 
+  geom_sf(size = 0.3)
+
+p2 <- plot_map + 
+  geom_raster(data = d_cod, aes(X*1000, Y*1000, fill = temp_vel)) + 
+  scale_fill_gradient2(name = "Temperature velocity") + 
+  geom_sf(size = 0.3)
+
+p3 <- plot_map + 
+  geom_raster(data = d_cod, aes(X*1000, Y*1000, fill = phi_vel)) + 
+  scale_fill_gradient2(name = "\u03C6 velocity") + 
+  geom_sf(size = 0.3)
+
+((p2 + p3) / (p1 + plot_spacer()))
+ggsave("figures/map_velos_cod.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+## Fit sdmTMB models of biomass velocities as a function of phi velocities
+
+```{r}
+coefs <- list()
+pred_velo1 <- list()
+pred_velo2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, c("X", "Y"), n_knots = 200)
+  plot(mesh)
+  
+  m <- sdmTMB(
+    bio_vel ~ phi_vel_sc * mean_phi_ct + mean_log_biomass_ct + quarter_f,
+    mesh = mesh,
+    data = dd,
+    family = gaussian(), 
+    spatial = "on",
+    spatiotemporal = "off",
+    control = sdmTMBcontrol(newton_loops = 1)
+  )
+  
+  sanity(m) 
+  
+  # Save coefficients??
+  coefs[[i]] <- tidy(m, conf.int = TRUE) %>% mutate(group = i)
+  
+  # Now predict the biotic velocity for high and low temperature with a sd change in the climate velocity
+  low_mean_clim <- as.numeric(quantile(dd$mean_phi_ct, prob = 0.05))
+  high_mean_clim <- as.numeric(quantile(dd$mean_phi_ct, prob = 0.95))
+  #sd_clim_v <- sd(dd$phi_vel)
+  mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+  # Predict
+  nd <- data.frame(phi_vel_sc = c(-1, 0, -1, 0),
+                   mean_phi_ct = rep(c(low_mean_clim, high_mean_clim), each = 2),
+                   mean_log_biomass_ct = rep(mean_log_biomass_ct, 4),
+                   X = mean(dd$X),
+                   Y = mean(dd$Y),
+                   quarter_f = as.factor(4))
+  
+  nsim = 1000
+  pred <- predict(m, newdata = nd, se_fit = TRUE, nsim = nsim)
+  
+  pred <- data.frame(
+    mean_phi_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+    est_change = c(pred[1, ], pred[3, ]),
+    est_0 = c(pred[2, ], pred[4, ]))
+  
+  pred <- pred %>% 
+    mutate(bio_trend_delta = est_change - est_0, # if bio trend is positive, bio increases with declines in phi
+           mean_clim = ifelse(mean_phi_ct == low_mean_clim, 
+                              "low_phi", "high_phi"),
+           group = i)
+    
+  pred_velo1[[i]] <- pred
+  
+  # Now make a prediction across a range of velocities
+  # Again I'm predicting for the range of the specific model
+  nd3 <- data.frame(expand.grid(phi_vel_sc = seq(quantile(dd$phi_vel_sc, probs = 0.05),
+                                                 quantile(dd$phi_vel_sc, probs = 0.95),
+                                                 length.out = 50),
+                                mean_phi_ct = c(low_mean_clim, high_mean_clim))) %>% 
+    mutate(mean_log_biomass_ct = mean_log_biomass_ct,
+           X = mean(dd$X),
+           Y = mean(dd$Y),
+           quarter_f = as.factor(4))
+  
+  pred3 <- predict(m, newdata = nd3, se_fit = TRUE)
+  
+  pred3 <- pred3 %>% 
+    mutate(lwr = est - 1.96*est_se,
+           upr = est + 1.96*est_se, 
+           group = i)
+  
+  pred_velo2[[i]] <- pred3
+  
+  ggplot(pred3, aes(phi_vel_sc, est, color = factor(mean_phi_ct))) + geom_line()
+  
+}
+
+phi_coefs <- dplyr::bind_rows(coefs) %>% 
+  mutate(sig = "N",
+         sig = ifelse(estimate < 0 & conf.high < 0, "Y", sig),
+         sig = ifelse(estimate > 0 & conf.low > 0, "Y", sig))
+
+phi_pred_delta <- dplyr::bind_rows(pred_velo1) %>% 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) %>% 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+phi_pred <- dplyr::bind_rows(pred_velo2) %>% 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) %>% 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+plot_map + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = bio_vel)) + 
+  facet_grid(life_stage ~ species) + 
+  #scale_fill_viridis() + 
+  scale_fill_gradient2() + 
+  geom_sf(size = 0.3)
+write_csv(phi_coefs, "output/phi_velo_coefs.csv")
+write_csv(phi_pred_delta, "output/pred_phi_velo_delta.csv")
+write_csv(phi_pred, "output/pred_phi_velo.csv")
+```
+
+## Plot phi velocity models
+
+```{r}
+phi_pred_delta2 <- phi_pred_delta %>%
+  mutate(mean_clim = ifelse(mean_clim == "high_phi", "High \u03C6", "Low \u03C6")) %>%
+  mutate(id2 = paste(species, life_stage))
+  
+order <- phi_pred_delta2 %>%
+  group_by(id2, mean_clim) %>% 
+  summarise(mean_delta = mean(bio_trend_delta)) %>% 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) %>% 
+  mutate(diff = `Low φ` - `High φ`) %>% 
+  arrange(desc(diff)) %>% 
+  mutate(Expected = ifelse(`Low φ` < `High φ`, "Yes", "No"))
+
+order
+
+phi_pred_delta2 <- phi_pred_delta2 %>% 
+  left_join(order %>% dplyr::select(Expected), by = "id2")
+
+phi_pred_delta2$id2 <- factor(phi_pred_delta2$id2, levels = c(order$id2))
+                                 
+phi_pred_delta2 %>%
+  ggplot(aes(bio_trend_delta, id2, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+  geom_density_ridges(color = NA) +
+  scale_fill_manual(values = c("steelblue2", "tomato3")) +
+  scale_alpha_manual(values = c(0.4, 0.8)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\ndecline in \u03C6 velocity", fill = "Mean climate") +
+  theme_plot(base_size = 16) +
+  theme(legend.direction = "vertical") +
+  NULL
+
+ggsave("figures/mi_velo_delta.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+
+# phi_pred %>% 
+#   mutate(id2 = paste(life_stage, species)) %>% 
+#   group_by(group) %>% 
+#   mutate(mean_clim = ifelse(mean_phi_ct == max(mean_phi_ct), "High \u03C6", "Low \u03C6")) %>% 
+#   ungroup() %>% 
+#   ggplot(aes(phi_vel_sc, est, color = mean_clim, fill = mean_clim)) +
+#   geom_ribbon(aes(ymin = lwr, ymax = upr), alpha = 0.3, color = NA) +
+#   geom_line(alpha = 0.8) +
+#   labs(y = "Predicted Biotic velocity (km/year)",
+#        x = "\u03C6 velocity (km/year)") +
+#   scale_fill_manual(values = c("steelblue2", "tomato3"), name = "") +
+#   scale_color_manual(values = c("steelblue2", "tomato3"), name = "") +
+#   facet_grid2(life_stage ~ species, scales = "free_y", independent = "y") +
+#   theme(aspect.ratio = 1) + 
+#   NULL
+
+#ggsave("figures/mi_velo_conditional.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+## Fit sdmTMB models of biomass velocities as a function of temperature velocities, given mean temperature (ooxygen would be cool to but I think perhaps its too correlated with temperature, cor = 0.8 ish)
+
+```{r}
+pred_velo_temp <- list()
+pred_velo_temp2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, c("X", "Y"), n_knots = 200)
+  plot(mesh)
+  
+  m <- sdmTMB(
+    bio_vel ~ temp_vel_sc * mean_temp_ct + mean_log_biomass_ct + quarter_f,
+    mesh = mesh,
+    data = dd,
+    family = gaussian(), 
+    spatial = "on",
+    spatiotemporal = "off",
+    control = sdmTMBcontrol(newton_loops = 1)
+  )
+  
+  sanity(m) 
+  
+  # Predict
+  low_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.05))
+  high_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.95))
+  mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+  nd <- data.frame(expand.grid(temp_vel_sc = c(0, 1),
+                               mean_temp_ct = seq(low_mean_clim,
+                                                  high_mean_clim,
+                                                  length.out = 2))) %>% 
+    mutate(mean_log_biomass_ct = mean_log_biomass_ct,
+           X = mean(dd$X),
+           Y = mean(dd$Y),
+           quarter_f = as.factor(4))
+   
+  nsim <- 1000
+  pred <- predict(m, newdata = nd, nsim = nsim)
+
+  pred <- data.frame(
+    mean_temp_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+    est_0 = c(pred[1, ], pred[3, ]),
+    est_change = c(pred[2, ], pred[4, ])) # note different order here than phi
+
+  pred <- pred %>% 
+    mutate(delta_bio_vel = est_change - est_0, # if bio trend is positive, bio increases with declines in phi
+           mean_clim = ifelse(mean_temp_ct == low_mean_clim, 
+                              "low_temperature", "high_temperature"),
+           group = i)
+  
+  pred_velo_temp[[i]] <- pred
+  
+  # Predict 2 (max and min warming, what's the expected?)
+  # nd2 <- data.frame(expand.grid(temp_vel_sc = c(quantile(dd$temp_vel_sc, probs = 0.01),
+  #                                               quantile(dd$temp_vel_sc, probs = 0.99)),
+  #                               mean_temp_ct = seq(quantile(dd$mean_temp_ct, probs = 0.01),
+  #                                                  quantile(dd$mean_temp_ct, probs = 0.99),
+  #                                                  length.out = 2))) %>% 
+  #   mutate(mean_log_biomass_ct = 0,
+  #          X = mean(dd$X),
+  #          Y = mean(dd$Y),
+  #          quarter_f = as.factor(4))
+  # 
+  # pred2 <- predict(m, newdata = nd2) %>% mutate(group = i)
+  # 
+  # pred_velo_temp2[[i]] <- pred2
+
+}
+
+pred_velo_temp <- dplyr::bind_rows(pred_velo_temp) %>% 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) %>% 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+# pred_velo_temp2 <- dplyr::bind_rows(pred_velo_temp2) %>% 
+#   separate(group, c("species", "life_stage"),
+#            sep = "_", remove = FALSE) %>% 
+#   mutate(species = str_to_title(species),
+#          life_stage = str_to_title(life_stage))
+
+write_csv(pred_velo_temp, "output/pred_temp_velo.csv")
+```
+
+```{r}
+pred_velo_temp2 <- pred_velo_temp %>%
+  mutate(mean_clim = ifelse(mean_clim == "low_temperature", "Cold", "Warm")) %>%
+  mutate(id2 = paste(species, life_stage))
+  
+order <- pred_velo_temp2 %>%
+  group_by(id2, mean_clim) %>% 
+  summarise(mean_delta = mean(delta_bio_vel)) %>% 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) %>% 
+  mutate(diff = `Warm` - `Cold`) %>% 
+  arrange(desc(diff)) %>% 
+  mutate(Expected = ifelse(Cold > Warm, "Yes", "No"))
+
+order
+
+pred_velo_temp2 <- pred_velo_temp2 %>% 
+  left_join(order %>% dplyr::select(Expected), by = "id2")
+
+pred_velo_temp2$id2 <- factor(pred_velo_temp2$id2, levels = c(order$id2))
+                                 
+pred_velo_temp2 %>%
+  ggplot(aes(delta_bio_vel, id2, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+  geom_density_ridges(color = NA) +
+  scale_fill_manual(values = c("steelblue2", "tomato3")) +
+  scale_alpha_manual(values = c(0.4, 0.8)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\nincrease in temperature velocity", fill = "Mean temperature") +
+  theme_plot(base_size = 16) +
+  theme(legend.direction = "vertical") +
+  NULL
+
+ggsave("figures/temp_velo_delta.pdf", width = 15, height = 17, units = "cm", device = cairo_pdf)
+```
+
+```{r}
+knitr::knit_exit
+```
+
+```{r test the max and min warming plot}
+# pred_velo_temp2 %>%
+#   mutate(group2 = paste(species, life_stage, sep = "")) %>% 
+#   group_by(group) %>% 
+#   mutate(mean_clim = ifelse(mean_temp_ct == min(mean_temp_ct), "Low temperature", "High temperature"),
+#          warming = ifelse(temp_vel_sc == max(temp_vel_sc), "Max warming", "Min warming")) %>%
+#   ungroup() %>% 
+#   ggplot(aes(est, group, color = mean_clim)) +
+#   geom_point(alpha = 0.7, size = 3) +
+#   scale_color_manual(values = c("red", "blue")) +
+#   geom_vline(xintercept = 0, linetype = 2) +
+#   facet_wrap(~factor(warming, levels = c("Min warming", "Max warming"))) +
+#   scale_fill_gradient2()
+# 
+# # Filter only max warming
+# pred_velo_temp2 %>%
+#   mutate(group2 = paste(species, life_stage, sep = "")) %>% 
+#   group_by(group) %>% 
+#   mutate(mean_clim = ifelse(mean_temp_ct == min(mean_temp_ct), "Low temperature", "High temperature"),
+#          warming = ifelse(temp_vel_sc == max(temp_vel_sc), "Max warming", "Min warming")) %>%
+#   ungroup() %>% 
+#   filter(warming == "Max warming") %>% 
+#   ggplot(aes(est, group, color = mean_clim)) +
+#   geom_point(alpha = 0.7, size = 3) +
+#   scale_color_manual(values = c("red", "blue")) +
+#   geom_vline(xintercept = 0, linetype = 2) +
+#   facet_wrap(~factor(warming, levels = c("Min warming", "Max warming"))) +
+#   scale_fill_gradient2()
+```
