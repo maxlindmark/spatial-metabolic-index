@@ -1937,63 +1937,6 @@ dat_haul <- dat %>%
   dplyr::select(lat, lon, year, month, quarter, month_year)
 ```
 
-#### Depth
-
-```{r}
-# Only use unique locations and then left_join else it will take forever
-# https://gis.stackexchange.com/questions/411261/read-multiple-layers-raster-from-ncdf-file-using-terra-package
-# https://emodnet.ec.europa.eu/geoviewer/
-dep_raster <- terra::rast("data/Mean depth natural colour (with land).nc")
-
-class(dep_raster)
-plot(dep_raster)
-
-dat_haul$depth <- terra::extract(dep_raster, dat_haul |> dplyr::select(lon, lat))$elevation
-
-ggplot(dat_haul, aes(lon, lat, color = depth*-1)) + 
-  geom_point() + 
-  scale_color_viridis(direction = -1)
-
-dat_haul$depth <- dat_haul$depth*-1
-```
-
-#### Substrate
-
-```{r}
-substrate <- terra::rast("data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif")
-
-newcrs <- "+proj=longlat +datum=WGS84"
-
-substrate_longlat = terra::project(substrate, newcrs)
- 
-plot(substrate_longlat)
-
-# Now extract the values from the saduria raster to dat
-dat_haul$substrate <- terra::extract(substrate_longlat, dat_haul |> dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
-
-unique(dat_haul$substrate)
-
-factor(sort(unique(round(dat_haul$substrate))))
- 
-dat_haul$substrate <- round(dat_haul$substrate)
-
-dat_haul <- dat_haul %>% mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
-                                substrate = ifelse(substrate == 2, "hard-bottom complex", substrate),
-                                substrate = ifelse(substrate == 3, "sand", substrate),
-                                substrate = ifelse(substrate == 4, "hard clay", substrate),
-                                substrate = ifelse(substrate == 5, "mud", substrate))
-
-# I. Bedrock.
-# II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
-# III. Sand including fine to coarse sand (with gravel exposures).
-# IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
-# V. Mud including gyttja-clay to gyttja-silt.
-
-# Plot
-ggplot(dat_haul, aes(lon, lat, color = substrate)) +
-  geom_point()
-```
-
 #### Oxygen
 
 ```{r}
@@ -2390,7 +2333,67 @@ big_dat_sal <- dplyr::bind_rows(sal_data_list)
 ```{r merge oxygen temp and salinity data with fish data}
 env_dat <- left_join(big_dat_oxy, big_dat_temp, by = c("month_year", "lon", "lat")) |> 
   left_join(big_dat_sal, by = c("month_year", "lon", "lat"))
+```
 
+#### Depth
+
+```{r}
+# Only use unique locations and then left_join else it will take forever
+# https://gis.stackexchange.com/questions/411261/read-multiple-layers-raster-from-ncdf-file-using-terra-package
+# https://emodnet.ec.europa.eu/geoviewer/
+dep_raster <- terra::rast("data/Mean depth natural colour (with land).nc")
+
+class(dep_raster)
+plot(dep_raster)
+
+env_dat$depth <- terra::extract(dep_raster, env_dat |> dplyr::select(lon, lat))$elevation
+
+ggplot(env_dat, aes(lon, lat, color = depth*-1)) + 
+  geom_point() + 
+  scale_color_viridis(direction = -1)
+
+env_dat$depth <- env_dat$depth*-1
+```
+
+#### Substrate
+
+```{r}
+substrate <- terra::rast("data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif")
+
+newcrs <- "+proj=longlat +datum=WGS84"
+
+substrate_longlat = terra::project(substrate, newcrs)
+ 
+plot(substrate_longlat)
+
+# Now extract the values from the saduria raster to dat
+env_dat$substrate <- terra::extract(substrate_longlat, env_dat |> dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
+
+unique(env_dat$substrate)
+
+factor(sort(unique(round(env_dat$substrate))))
+ 
+env_dat$substrate <- round(env_dat$substrate)
+
+env_dat <- env_dat %>% mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
+                              substrate = ifelse(substrate == 2, "hard-bottom complex",
+                                                 substrate),
+                              substrate = ifelse(substrate == 3, "sand", substrate),
+                              substrate = ifelse(substrate == 4, "hard clay", substrate),
+                              substrate = ifelse(substrate == 5, "mud", substrate))
+
+# I. Bedrock.
+# II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
+# III. Sand including fine to coarse sand (with gravel exposures).
+# IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
+# V. Mud including gyttja-clay to gyttja-silt.
+
+# Plot
+ggplot(env_dat, aes(lon, lat, color = substrate)) +
+  geom_point()
+```
+
+```{r}
 # Now join these data with the full_dat
 dat_full <- left_join(dat, env_dat, by = c("month_year", "lon", "lat"))
 ```
@@ -2415,5 +2418,3 @@ dat_full_save <- dat_full |>
 
 write.csv(dat_full_save, file = "data/clean/catch_by_length.csv", row.names = FALSE)
 ```
-
-# read and summarize in new script
