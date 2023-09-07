@@ -1,0 +1,170 @@
+---
+title: "Functions to go from oxygen concentration to partial pressure"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+   html:
+      self-contained: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align ='center'
+)
+
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+## Load libraries
+
+```{r}
+library(rMR)
+library(dplyr)
+```
+
+## Background
+I've used the function `DO.unit.convert` in the package `rMR` to convert between oxygen units in experimental data, like Tim did. But I'm unsure if it's OK to use it for data (model output), which span a much larger pressure gradient. Because I get very interesting patterns with depth, and I can't tell if they are correct. I asked the package author for advice, but he couldn't really say why, but was potentially skeptical about using these function at those depths (similar to other packages which focus on normal pressure situations). Long story short, here's an example:
+
+```{r}
+# Generate some fake data based on regression fitted to my data of oxygen
+# in unit mg/L and depth in meter
+set.seed(123)
+# Simulate some data..
+# summary(lm((d$oxy*(1/0.7)) ~ d$depth))
+n <- 500
+eps <- rnorm(n = n, mean = 0, sd = 0.1) # smaller sd just to show patterns better
+
+df <- data.frame(depth = seq(0, 80, length.out = n))
+df$oxygen_conc <- 15 + df$depth*-0.12 + eps
+
+# Add in pressure!
+rho = 1.030 # density of water (kg/km^-3)
+p_atm = 1.01325 # atmospheric pressure
+g = 9.807 # gravity of earth
+
+df$pressure_kPa <- (rho*g*df$depth + p_atm)
+
+df$oxygen_p <- DO.unit.convert(df$oxy, DO.units.in = "mg/L", DO.units.out = "PP", bar.units.in = "kpa",
+                               bar.units.out = "kpa", temp.C = 10, salinity = 10, salinity.units = "pp.thou",
+                               bar.press = df$pressure_kPa) # Ignore temperature and salinity because that doesn’t drive the pattern
+
+# plot(df$depth, df$pressure_kPa) # pressure v depth is linear
+# plot(df$depth, df$oxygen_conc) # oxygen v depth is linear
+plot(df$depth, df$oxygen_p) # oxygen in pressure v depth is non-linear? 
+# This is the same pattern I saw in the MI, and since I don't know
+# what the relationship should look like, nor if I can use this function 
+# for such extrapolations, I will try to calculate it manually.
+
+# Convert to micromol per litre
+# 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
+
+df$o2_umolkg <- df$oxygen_conc * 44.661
+```
+
+## The problem
+I think I have to do it manually, because I can't seem to find any good functions out there (which surprises me a bit). I went to Tim's repo for the Ecography paper and found two functions that I think I need. First, a function calculating oxygen solubility as a function of temperature and salinity:
+
+```{r}
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#LL2C1-L21C2
+gsw_O2sol_SP_pt <- function(sal, temp) {
+  x = sal
+  ts = log((298.15 - temp)/(273.15 + temp))
+  
+  a0 =  5.80871
+  a1 =  3.20291
+  a2 =  4.17887
+  a3 =  5.10006
+  a4 = -9.86643e-2
+  a5 =  3.80369
+  b0 = -7.01577e-3
+  b1 = -7.70028e-3
+  b2 = -1.13864e-2
+  b3 = -9.51519e-3
+  c0 = -2.75915e-7
+  
+  O2sol = exp(a0 + ts*(a1 + ts*(a2 + ts*(a3 + ts*(a4 + a5*ts)))) + x*(b0 + ts*(b1 + ts*(b2 + b3*ts)) + c0*x))
+  return(O2sol)
+}
+```
+
+I understand it is based on [this paper](https://aslopubs.onlinelibrary.wiley.com/doi/pdf/10.4319/lo.1992.37.6.1307), Eq. 8 (or at least there I see these equations!). So far so good!
+
+The next step is to divide the concentration by the solubility. Here's his function that does that, but there are many steps I'm not able to follow here (actually, the function calculates the metabolic index, but I've cropped it after the `po2` calculation since that's what I want). My questions are after `# ml: `
+
+```{r}
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#L88C4-L117
+calc_po2_mi <- function(dat) {
+  #O2 from trawl data is in ml/l - may need to be converted to umol/kg
+  gas_const = 8.31
+  partial_molar_vol = 0.000032
+  kelvin = 273.15
+  #boltz = 0.000086173324
+  
+  #calculate percent saturation for O2 - assumes  units of mL O2/L
+  # Input:       S = Salinity (pss-78)
+  #              T = Temp (deg C) ! use potential temp
+  #depth is in meters
+  #[umole/kg] = [ml/L]*44660/(sigmatheta(P=0,theta,S) + 1000)
+
+  # dat$SA = gsw_SA_from_SP(dat$sal,dat$depth,dat$longitude_dd,dat$latitude_dd) #absolute salinity for pot T calc
+  # dat$pt = gsw_pt_from_t(dat$SA,dat$temp,dat$depth) #potential temp at a particular depth
+  # dat$CT = gsw_CT_from_t(dat$SA,dat$temp,dat$depth) #conservative temp
+  # dat$sigma0 = gsw_sigma0(dat$SA,dat$CT)
+  # dat$o2_umolkg = dat$o2*44660/(dat$sigma0+1000)
+  
+  # ml: I don't think I need the 5 lines above, because I already have oxygen
+  # in unit micro mol per kg at the sea floor (default unit from the data product),
+  # so I shouldn't be correcting again for other temperature and depth..
+
+  dat$O2_Sat0 = gsw_O2sol_SP_pt(dat$sal,dat$temp) # ml: this is from the function, ** this is tp in Tim's script
+  # above, which returns the solubility of oxygen as a function of temp. and sal.
+  
+  #= o2satv2a(sal,pt) #uses practical salinity and potential temp - solubility at p =1 atm
+  dat$press = exp(dat$depth*10000*partial_molar_vol/gas_const/(dat$temp+kelvin)) 
+  # ml: I'm not sure what this equation refers to! and why is it exp() ?
+  #dat$O2_satdepth = dat$O2_Sat0*dat$press # ml: this is not used to calculate po2
+  
+  #solubility at p=0
+  dat$sol0 = dat$O2_Sat0/0.209 # ml: this I don't know either!
+  # why 0.209? we need sol0 to calculate sol_Dep which we need for po2
+  dat$sol_Dep = dat$sol0*dat$press
+  dat$po2 = dat$o2_umolkg/dat$sol_Dep
+  dat$po2 <- dat$po2 * 101.325 # convert to kPa
+
+  return(dat)
+    
+  #stop here, no need to calculate mi
+}
+
+
+```
+
+```{r}
+
+df <- df |>
+  mutate(sal = 10, temp = 10) |> 
+  mutate(O2sol = gsw_O2sol_SP_pt(sal = sal, temp = temp))
+  
+  
+df2 <- calc_po2_mi(dat = df)
+
+
+plot(df2$oxygen_conc, df2$po2)
+```
+
+
+Ok so to wrap up, my questions are...
+
+- What is `dat$press` really? What equation is that that has exp(depth, partial molar volume the gas constant and kelvin temperature) ?
+
+- Why do we divide temperature- and salinity-dependent oxygen solubility with 0.209?
+
+- I guess this part: `dat$sol_Dep = dat$sol0*dat$press` is just to correct the solubility for pressure? Which the main function to calculate solubility, `gsw_O2sol_SP_pt`, doesn't do.
+
+
+
+
+
+

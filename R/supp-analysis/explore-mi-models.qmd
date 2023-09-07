@@ -1,0 +1,353 @@
+---
+title: "Explore how to model the metabolic index"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+#### Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+#| code-fold: true
+
+# Can help to remove before installing specific branch
+# remove.packages("sdmTMB")
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "RCurl", "viridis", "devtools") 
+
+# minpack.lm needed if using nlsLM()
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# Install mi branch
+# with_libpaths(new = "/Users/maxlindmark/Dropbox/Max work/R/sdmTMB-mi/",
+#               install_github("pbs-assess/sdmTMB", ref = "mi"))
+
+library(sdmTMB, lib.loc = "/Users/maxlindmark/Dropbox/Max work/R/sdmTMB-mi")
+
+# devtools::install_github("seananderson/ggsidekick") # not on CRAN 
+library(ggsidekick)
+theme_set(theme_sleek())
+
+# Set path
+home <- here::here()
+```
+
+#### Read data
+
+```{r read data}
+#| message: false
+#| warning: false
+#| code-fold: true 
+# Read data
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+  rename(X = x, Y = y) |> 
+  drop_na(depth) |> 
+  drop_na(sal) |> 
+  drop_na(temp) |> 
+  drop_na(oxy) |> 
+  mutate(depth_ct = depth - mean(depth),
+         depth_sc = depth_ct / sd(depth),
+         depth_sq = depth_sc^2,
+         sal_sc = scale(sal),
+         year_f = as.factor(year),
+         quarter_f = as.factor(quarter)) |> 
+  # Oxygen is ml/L, we want micro mol/L. 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
+  mutate(oxy_si = (oxy * (10^3)) / 22.391) |> 
+  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
+                 flounder_juvenile, plaice_adult, plaice_juvenile),
+               names_to = "group", values_to = "density") |> 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+  drop_na(density) |> 
+  filter(year > 2010) |> # trim data while exploring
+  filter(density < 4000) |> 
+  filter(group == "cod_adult") # testing with adult cod
+
+# Read metabolic parameter estimates and left_join
+mi_pars <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") |> 
+  dplyr::select(-temp, -po2) # This is critical oxygen, not not be confused with oxygen in the data
+
+# Read size csv to calculate the metabolic index
+sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") |> 
+  mutate(group = paste(species, name, sep = "_")) |> 
+  dplyr::select(group, B) 
+
+d <- left_join(d, mi_pars, sizes, by = "species")
+d <- left_join(d, sizes, by = "group")
+```
+
+#### Calculate the metabolic index
+
+Do this using Eq. 1 equation from Essington et al. (2022) and the global and species specific parameters. This to be able to plot density vs $\Phi$ to be able to set appropriate starting values for the model that estimates $Eo$ internally, and for comparing the MI branch approach to estimate $Eo$ with the standard approach to just treat the experimentally-derived $\Phi$ as a covariate.
+
+```{r calculate metabolic index}
+t_ref <- 15 # arbitrary reference temperature
+bk <- 0.000086173324 # Boltzmann's constant
+
+d <- d |>
+  mutate(
+    # inv_temp does not contain bk, for calculating phi as in Essington paper
+    inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
+    # This phi is based on concentration of oxygen (and MI parameters estimated to concentration data)
+    phi = A0_o2 * (B^n_o2) * oxy_si * exp((E_o2/bk) * inv_temp),
+    # invtemp contains kb, as in sdmTMB_mi_example.R
+    invtemp = (1 / bk)  * ( 1 / (temp + 273.15) - 1 / (t_ref + 273.15)))  
+```
+
+#### Find starting values
+
+From sdmTMB_mi_example.R:
+
+*we've been calling this "po2 prime" instead of metabolic index, since it is not the full equation but really just a temperature-corrected oxygen*
+
+- Does that mean that the logistic equation we are fitting $$s_{max}((1 + \exp(-\log(19) \times (x - s50)/\delta))^{-1} - 1)$$ is the relationship between density and $\text{O}_2'$, not the density as a function of $\Phi$? It matters for exploring starting values I think, at least for $\delta$ and $s50$. Anyway, I have $\Phi$ already, but I will also calculate $\text{O}_2'$ using the same experimentally derived $Eo$.
+
+```{r}
+d <- d |> mutate(o2_prime = oxy_si * exp(E_o2 * invtemp))
+```
+
+Now I'll plot density vs $\Phi$ and density vs $\text{O}_2'$ and fit a GAM to visualize the relationship. We can use those curves as targets for our "fit by eye" curves that well use as starting values.
+
+```{r}
+p1 <- ggplot(d, aes(phi, density)) + 
+  geom_point(alpha = 0.2) +
+  geom_smooth(aes(color = "GAM"), method = "gam", formula = y ~ s(x, k = 20), se = FALSE, linewidth = 1) +
+  coord_cartesian(ylim = c(0, 3000)) +
+  labs(y = "Biomass density (kg/km)", x = "fixed metabolic index", color = "") +
+  NULL
+
+p1
+
+p2 <- ggplot(d, aes(o2_prime, density)) + 
+  geom_point(alpha = 0.2) +
+  geom_smooth(aes(color = "GAM"), method = "gam", formula = y ~ s(x, k = 20), se = FALSE, linewidth = 1) +
+  coord_cartesian(ylim = c(0, 3000)) +
+  labs(y = "Biomass density (kg/km)", x = "o2'", color = "") +
+  NULL
+
+p2
+```
+
+Now, find starting values that yield curves similar to the GAM (but without the dip at high values). 
+
+But here's what we talked about in the e-mails. In order to make a conditional effect plot of the whole term (i.e., raw biomass density on y, not scaled biomass density, which I need to judge if the starting values are reasonable), I need to exponentiate the prediction _and_ add in $s_{max}$ in again! If I don't exponentiate, the prediction is between negative values and 0, and if I exponentiate without multiplying $s_{max}$ again after (twice in total), it's bound between 0 and 1. If I do both, it looks like a proper unscaled conditional effect. See below:
+
+```{r}
+# Set starting parameters: 
+s50 <- -1
+delta <- 0.5
+smax <- 400
+Eo <- 0.6
+
+# Calculate MI/O2' based on the starting values
+nd <- data.frame(phi = seq(min(d$phi), max(d$phi), length.out = 100))
+
+pred_dens_from_mi <- smax * ((1 + exp(-log(19) * (nd$phi - s50)/(delta)))^(-1) - 1)
+```
+
+Plot the prediction from starting values when only exponentiating (note $s_{max}$ is in the calculation above)
+
+```{r}
+#| message: false
+p1 + 
+  geom_line(data = nd, 
+            aes(phi, exp(pred_dens_from_mi), color = "logistic starting vals"), linewidth = 1) +
+  coord_cartesian(ylim = c(0, 10)) +
+  geom_hline(yintercept = 1, alpha = 0.5, linetype = 4) + 
+  labs(title = "Exponentiated: not enough to have smax once in the calculation to make it a raw conditional")
+```
+
+Plot the prediction from starting values when exponentiating *and* multiplying in $s_{max}$ again after (so twice in total)
+
+```{r}
+p1 + 
+  geom_line(data = nd, 
+            aes(phi, exp(pred_dens_from_mi)*smax, color = "logistic starting vals"), linewidth = 1) +  
+  labs(title = "Exponentiated *and* s_max after exponentiation. Now the limit is s_max!")
+
+# Now do it on o2_prime; need to tweak delta and s50, the other parameters can stay
+o2_delta <- 200
+o2_s50 <- -400
+
+nd2 <- data.frame(o2_prime = seq(min(d$o2_prime), max(d$o2_prime), length.out = 100))
+
+pred_dens_from_o2prime <- smax * ((1 + exp(-log(19) * (nd2$o2_prime - o2_s50)/(o2_delta)))^(-1) - 1)
+
+p2 + 
+  geom_line(data = nd2, 
+            aes(o2_prime, exp(pred_dens_from_o2prime)*smax, color = "logistic starting vals"), linewidth = 1)
+```
+
+Update: according to Julia, if I don't exponentiate, I get the raw effect.
+
+```{r}
+# Set starting parameters: 
+s502 <- 0.25
+delta2 <- 0.75
+smax2 <- 400
+Eo2 <- 0.6
+
+pred_dens_from_mi2 <- smax2 * ((1 + exp(-log(19) * (nd$phi - s502)/(delta2)))^(-1) - 1)
+
+p1 + 
+  geom_line(data = nd, 
+            aes(phi, pred_dens_from_mi2 + smax, color = "logistic starting vals"), linewidth = 1) +
+  #coord_cartesian(ylim = c(0, 10)) +
+  geom_hline(yintercept = 1, alpha = 0.5, linetype = 4) + 
+  labs(title = "Exponentiated: not enough to have smax once in the calculation to make it a raw conditional")
+```
+
+##### Fit model
+
+Ok, so I think now I got reasonable starting values, for both versions ($\Phi$ and $\text{O}_2'$). With that I mean the conditional effects look good enough _assuming_ I can/should multiply the exponentiated prediction again with $s_{max}$ after. Can we fit the model?
+
+```{r}
+# Make mesh
+mesh <- make_mesh(d,
+                  xy_cols = c("X", "Y"),
+                  cutoff = 15)
+
+ggplot() +
+  inlabru::gg(mesh$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = d, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+  labs(x = "Easting (km)", y = "Northing (km)")
+```
+
+The below model doesn't fit, I get `Error in stats::nlminb(start = tmb_obj1$par, objective = tmb_obj1$fn, : NA/NaN gradient evaluation` even if I play around with boundary values, and $\delta$ and $s50$ depending on if we are fitting the logistic to $\Phi$ rather than $\text{O}_2'$.
+  
+```{r}
+#| eval: false
+# To use the logistic(mi) funciton, we need a oxy_si column. We'll use oxygen concentration instead, they are proportional
+d <- d |> mutate(po2 = oxy_si)
+
+start <- matrix(0, ncol = 1, nrow = 4)
+start[1, 1] <- s502 # o2_s50
+start[2, 1] <- delta2 # o2_delta
+start[3, 1] <- smax2
+start[4, 1] <- Eo2
+
+d2 <- d |> mutate(po2 = ifelse(po2 < 0, 0, po2))
+
+m <- sdmTMB(density ~ 1 + logistic(mi), #0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq +
+            data = d2,
+            mesh = mesh,
+            #family = tweedie(link = "log"),
+            spatiotemporal = "off", # for speed
+            spatial = "on", # for speed
+            #time = "year",
+            # Put a prior on the activation energy?
+            #priors = sdmTMBpriors(threshold = normal(c(0, 0, 400, 0), c(10, 10, 10, 10))),
+            control = sdmTMBcontrol(
+              start = list(b_threshold = start),
+            #Note: will need to adjust bounds for your dataset
+              lower = list(b_threshold = c(-Inf, -Inf, smax*0.5, 0)),
+              upper = list(b_threshold = c(Inf, Inf, smax*2, Inf)),
+            #Newton_loops can be altered if needed
+            #Can also add in changes to max iterations, max evaluations,
+              newton_loops = 1
+            )
+)
+
+sanity(m)
+```
+
+```{r}
+knitr::knit_exit()
+```
+
+
+```{r}
+#| include: false
+# Start with non-spatial model for speed
+logi <- sdmTMB(density ~ 1 + logistic(phi), #0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + 
+            data = d,
+            mesh = mesh,
+            family = tweedie(link = "log"),
+            spatiotemporal = "off", # for speed
+            spatial = "on", # for speed
+            time = "year"#,
+            # Putting a prior on the activation energy
+            # priors = sdmTMBpriors(threshold = normal(c(NA, NA, NA, NA), c(NA, NA, NA, NA))),
+            # control = sdmTMBcontrol(
+            #   start = list(b_threshold = start),
+              # Note: will need to adjust bounds for your dataset
+              # lower = list(b_threshold = c(0, 0, 0, 0)),
+              # upper = list(b_threshold = c(Inf, Inf, 100, Inf)),
+              # Newton_loops can be altered if needed
+              # Can also add in changes to max iterations, max evaluations,
+              #newton_loops = 1)
+)
+
+smooth <- sdmTMB(density ~ 1 + s(phi), #0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + 
+            data = d,
+            mesh = mesh,
+            family = tweedie(link = "log"),
+            spatiotemporal = "off", # for speed
+            spatial = "on", # for speed
+            time = "year"#,
+            # Putting a prior on the activation energy
+            # priors = sdmTMBpriors(threshold = normal(c(NA, NA, NA, NA), c(NA, NA, NA, NA))),
+            # control = sdmTMBcontrol(
+            #   start = list(b_threshold = start),
+              # Note: will need to adjust bounds for your dataset
+              # lower = list(b_threshold = c(0, 0, 0, 0)),
+              # upper = list(b_threshold = c(Inf, Inf, 100, Inf)),
+              # Newton_loops can be altered if needed
+              # Can also add in changes to max iterations, max evaluations,
+              #newton_loops = 1)
+)
+
+bpt <- sdmTMB(density ~ 1 + breakpt(phi), #0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + 
+            data = d,
+            mesh = mesh,
+            family = tweedie(link = "log"),
+            spatiotemporal = "off", # for speed
+            spatial = "on", # for speed
+            time = "year"#,
+            # Putting a prior on the activation energy
+            # priors = sdmTMBpriors(threshold = normal(c(NA, NA, NA, NA), c(NA, NA, NA, NA))),
+            # control = sdmTMBcontrol(
+            #   start = list(b_threshold = start),
+              # Note: will need to adjust bounds for your dataset
+              # lower = list(b_threshold = c(0, 0, 0, 0)),
+              # upper = list(b_threshold = c(Inf, Inf, 100, Inf)),
+              # Newton_loops can be altered if needed
+              # Can also add in changes to max iterations, max evaluations,
+              #newton_loops = 1)
+)
+
+arrange(AIC(logi, smooth, bpt), AIC)
+
+sanity(m)
+summary(m)
+```
+
+# q's for Julia:
+  # lower upper the same?
+  # what is the -1? Can't see that in the vignette on the logistic function! (https://pbs-assess.github.io/sdmTMB/articles/threshold-models.html)
+  # 
+  

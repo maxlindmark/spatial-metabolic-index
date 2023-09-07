@@ -1,0 +1,297 @@
+---
+title: "Estimate metabolic index parameters"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  df_print: paged
+pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE, cache=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 12,
+  fig.asp = 0.618,
+  fig.align ='center'
+)
+```
+
+# Intro
+Fit models à la Essington (2022) to acquire metabolic index parameters from a mixed GLMM (glmmTMB), leveraging information from species with lots of experimental data. Save metabolic index params and export as csv.
+
+## Load packages & source functions
+
+```{r load libraries, message=FALSE, warning=TRUE}
+# Load libraries, install if needed
+library(tidyverse)
+library(readxl)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(glmmTMB)
+library(rMR)
+library(RColorBrewer)
+library(patchwork)
+
+# Source code for plots
+source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+
+theme_set(theme_plot())
+```
+
+# Intro
+Here we estimate metabolic index parameters using glmmTMB to data compiled by Essington et al (2022) with experimental data from Baltic Sea species added. We do it in units partial pressure and mg/L.
+
+```{r estimate metabolic index parameters using glmmTMB}
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/estimate_mi_parameters.R
+
+# Read data
+o2 <- readr::read_delim("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/essington_pO2_extended.csv", delim = ";") %>% 
+  dplyr::select(-comment)
+
+unique(o2$source)
+
+# Now we need to standardize units across experimental data
+spc_list <- unique(o2$spc)
+
+c_to_K <- function(x) x + 273.15
+
+# TODO: check salinity units in Essington data, not sure it's correct + my values are in pp.thou
+# Get the experimental data in po2
+o2$po2 <- NA
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(o2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(o2, spc == spc_list[i])
+  
+  tmp_dat$po2 <- DO.unit.convert(tmp_dat$lc50,
+                                 DO.units.in = tmp_dat$units[1],
+                                 DO.units.out = "PP", 
+                                 bar.press = 1,
+                                 bar.units.in = "atm",
+                                 temp.C = tmp_dat$temp,
+                                 bar.units.out = "kpa",
+                                 salinity = tmp_dat$salinity[1],
+                                 salinity.units = "uS")
+  
+  o2$po2[spc_index] <- tmp_dat$po2
+  
+}
+
+# Get the experimental data in unit mg/L
+o2$o2 <- NA
+
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(o2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(o2, spc == spc_list[i])
+  
+  tmp_dat$o2 <- DO.unit.convert(tmp_dat$lc50,
+                                DO.units.in = tmp_dat$units[1],
+                                DO.units.out = "mg/L", 
+                                bar.press = 1,
+                                bar.units.in = "atm",
+                                temp.C = tmp_dat$temp,
+                                bar.units.out = "kpa",
+                                salinity = tmp_dat$salinity[1],
+                                salinity.units = "uS")
+  
+  o2$o2[spc_index] <- tmp_dat$o2
+  
+}
+
+# Now convert to convert oxygen from mg/L -> ml/L -> micro mol/l
+# 1 mg/l = 22.391 ml/31.998 = 0.700 ml/l 
+# https://www.ices.dk/data/tools/Pages/Unit-conversions.aspx
+
+o2$o2 <- ((o2$o2*0.7) * (10^3)) / 22.391
+
+o2$spc <- as.factor(o2$spc)
+nspc <- length(levels(o2$spc))
+
+ggplot(o2, aes(po2, o2)) + 
+  geom_point()
+
+# Add Boltzmann-Arrhenius temperature
+tref <- 15 # arbitrary reference temperature
+kb <- 0.000086173324 # Boltsmann's constant in unit Ev
+o2$inv_temp <- (1 / kb)  * ( 1 / (o2$temp + 273.15) - 1 / (tref + 273.15))
+
+# Plot the data we want to fit
+o2 %>% 
+  pivot_longer(c(po2, o2)) %>% 
+  ggplot(aes(inv_temp, -log(value), color = spc)) + 
+  geom_point() + 
+  geom_smooth(aes(inv_temp, -log(value)), method = "lm", inherit.aes = FALSE) +
+  facet_wrap(~name, ncol = 1)
+
+o2 %>% 
+  filter(spc %in% c("AtlanticCod", "plaice", "dab")) %>% 
+  ggplot(aes(log(b), log(po2), shape = ref, fill = spc, color = spc)) + 
+  geom_point(size = 4) + 
+  scale_shape_manual(values = c(21:24)) +
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme(legend.position = c(0.85, 0.85))
+```
+
+The last plot illustrates the issue with cod. We know from regional experiments that Baltic cod have a higher critical oxygen, but if we use experiments by Plante using cod from the Western Atlantic, we will estimate them to be MORE oxygen tolerant than Baltic flatfishes. We don't have enough data to estimate both a random species intercept and a "reference" effect. So what I'll do is that I use the original Essington data to estimate the size and temperature dependence of (p)O2 crit, and then use those estimates to temperature-correct the Baltic experimental data (which anyway don't have mass or temperature variation, so removing them from the data set is a small loss.)
+
+```{r}
+o2_og <- o2 %>%
+  filter(source == "Essington2022")
+
+# Fit model to Eq.2 in Essington (2022). Fixed effects of mass and temperature
+# oxygen in unit pp
+fit_po2 <- glmmTMB(-log(po2) ~ (1|spc) + log(b) + inv_temp,
+                   data = o2_og,
+                   family = gaussian(link = "identity"))
+
+summary(fit_po2)
+
+# oxygen in unit micro mol / L
+fit_o2 <- glmmTMB(-log(o2) ~ (1|spc) + log(b) + inv_temp,
+                  data = o2_og,
+                  family = gaussian(link = "identity"))
+
+summary(fit_o2)
+
+# Now we can mass and temperature correct (p)O2 in Baltic experiments
+fe_o2 <- tibble(term = names(fixef(fit_o2)$cond),
+                est = fixef(fit_o2)$cond) %>% 
+  filter(term %in% c("log(b)", "inv_temp")) %>% 
+  pivot_wider(names_from = "term", values_from = est) %>% 
+  rename(n_o2 = `log(b)`,
+         E_o2 = inv_temp)
+
+fe_po2 <- tibble(term = names(fixef(fit_po2)$cond),
+             est = fixef(fit_po2)$cond) %>% 
+  filter(term %in% c("log(b)", "inv_temp")) %>% 
+  pivot_wider(names_from = "term", values_from = est) %>% 
+  rename(n_po2 = `log(b)`,
+         E_po2 = inv_temp)
+
+o2_new <- o2 %>%
+  filter(source == "Lindmark") %>% 
+  dplyr::select(spc, b, inv_temp, temp, po2, o2)
+
+# Temperature and mass correct Baltic species critical oxygen using Essington Eq. 2 and the estimated parameters
+# This is how I originally did it... Following Essington eq.
+# log_po2 = -E*inv_temp - log(Ao) - n*log(b)
+# = 
+# log(Ao) = -E*inv_temp - n*log(b) - log_po2
+
+log(o2_new$o2) = - fe_o2$E_o2*o2_new$inv_temp - log(x) - fe_o2$n_o2*log(o2_new$b)
+log_ao = - fe_o2$E_o2*o2_new$inv_temp - fe_o2$n_o2*log(o2_new$b) - log(o2_new$o2)
+log_ao
+exp(log_ao)
+o2_new$spc
+
+
+o2_new <- o2_new %>%
+  mutate(A0_o2 = exp(-fe_o2$E_o2*inv_temp - log(o2) - fe_o2$n_o2*log(b)))
+# But then cod has among the highest tolerance, but in data it has the lowest (i.e., the highest o2 crit value)
+
+o2_new
+
+# what is the intercept... rate when mass and temp is 0?
+
+# This is how I would do it... First correct for mass by dividing by mass^n. That is the o2 for a 1 g fish...
+# o2_new$mass_corr_po2 <- o2_new$po2 / (o2_new$b^fe_po2$n_po2)
+# o2_new
+#  
+# # Now temperature-correct..
+# o2_new$mass_temp_corr_o2 <- o2_new$mass_corr_po2 / (exp(-fe_po2$E_po2*o2_new$inv_temp))
+# o2_new
+ 
+# summary(fit_o2)
+# 
+# exp(-2.42807)
+
+
+# install.packages("respirometry")
+# library(respirometry)
+# ?scale_MO2
+# scale_MO2
+
+o2_new <- o2_new %>% 
+  mutate(A0_o2 = b^fe_o2$n_o2 * o2 * exp(fe_o2$E_o2*inv_temp),
+         A0_po2 = b^fe_po2$n_po2 * po2 * exp(fe_po2$E_po2*inv_temp))
+
+o2_new
+
+# Check if correct (if we can recreate the random intercepts using this manual correction)
+re_po2 <- data.frame(spc = row.names(ranef(fit_po2)$cond$spc), 
+                     est = ranef(fit_po2)$cond$spc$`(Intercept)`) %>% 
+  mutate(A0_po2 = exp((fixef(fit_po2)$cond[1] + est) *-1))
+
+# Original version (i.e., log scale as in Eq 2 Essington et al)
+# o2_og <- o2_og %>% 
+#   mutate(A0_po2 = exp(-fe_po2$E_po2*inv_temp - log(po2) - fe_po2$n_po2*log(b)))
+
+o2_og <- o2_og %>% 
+  mutate(A0_po2 = b^fe_po2$n_po2 * po2 * exp(fe_po2$E_po2*inv_temp))
+
+ggplot(o2_og, aes(spc, A0_po2, color = "manual mass and temp normalization")) + 
+  geom_jitter(height = 0, width = 0.1, size = 2) +
+  geom_point(data = re_po2, aes(spc, A0_po2, color = "random intercept"), size = 2) + 
+  geom_point(data = o2_new, aes(spc, A0_po2, color = "baltic species"), size = 2) + 
+  scale_color_brewer(palette = "Set2", name = "")
+
+# fixed effects?
+fit_o2_2 <- glmmTMB(-log(o2) ~ spc + log(b) + inv_temp,
+                  data = o2_og,
+                  family = gaussian(link = "identity"))
+fixef(fit_o2_2)
+
+
+
+
+
+
+
+
+# Now do concentration...
+re_o2 <- data.frame(spc = row.names(ranef(fit_o2)$cond$spc), 
+                    est = ranef(fit_o2)$cond$spc$`(Intercept)`) %>% 
+  mutate(A0_o2 = exp((fixef(fit_o2)$cond[1] + est) *-1))
+
+o2_og <- o2_og %>% 
+  mutate(A0_o2 = b^fe_o2$n_o2 * o2 * exp(fe_o2$E_o2*inv_temp))
+
+ggplot(o2_og, aes(spc, A0_o2, color = "manual mass and temp normalization")) + 
+  geom_jitter(height = 0, width = 0.1, size = 2) +
+  geom_point(data = re_o2, aes(spc, A0_o2, color = "random intercept"), size = 2) + 
+  geom_point(data = o2_new, aes(spc, A0_o2, color = "baltic species"), size = 2) + 
+  scale_color_brewer(palette = "Set2", name = "")
+
+# Looks good... Now we can save this dataframe and load it when we need to calculate mi in the data.
+mi_params <- o2_new %>%
+  dplyr::select(-b, -inv_temp, po2, o2) %>% 
+  mutate(n_po2 = fe_po2$n_po2,
+         E_po2 = fe_po2$E_po2,
+         n_o2 = fe_o2$n_o2,
+         E_o2 = fe_o2$E_o2) %>% 
+  rename(species = spc) %>% 
+  mutate(species = ifelse(species == "AtlanticCod", "cod", as.character(species)))
+
+mi_params
+```
+ 
+ 
+conclusion... i think it's done correctly... to use eq. straight out.
+some questions:
+1. Why -po2 crit in essingtons model?
+2. I feel cod should have the highest intercept... because they have the highest po2 and o2. why would the order change if it's not due to mass correction? (it isn't)
+3. isn't the intercept the value when mass is... 1 ? and if so, should i divide it by b^n ? and then multiply with mass^n ? (but is mass = 1 this step is not needed. and then the same for temperature?)
+
+
+
+
+ 

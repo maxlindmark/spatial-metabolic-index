@@ -1,0 +1,691 @@
+---
+title: "Compare pressure vs concentration based metabolic indices"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE, cache=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 12,
+  fig.asp = 0.618,
+  fig.align ='center'
+)
+```
+
+```{r}
+# TODO: Try with real data, ask SMHI
+```
+
+## Load packages & source functions
+
+```{r load libraries, message=FALSE, warning=TRUE}
+# Load libraries, install if needed
+library(tidyverse)
+library(readxl)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(sdmTMB)
+# library(sdmTMB, lib.loc = "/Users/maxlindmark/Dropbox/Max work/R/sdmTMB-mi")
+library(rMR)
+library(viridis)
+library(ggcorrplot)
+library(visreg)
+
+# Source code for plots
+source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+
+theme_set(theme_plot())
+```
+
+## Background
+
+In November I played around with metabolic index parameters for cod from Deutsch **et al**., (2015). For simplicity I chose the concentration-based metabolic index (phi). Models with a smooth phi effect outperformed all other models (various combinations of oxygen and temperature, smooth, linear, interactive, breakpoints). However, when I took up this project I switched to a pressure-based metabolic index, following Essington **et al**., (2022). I noticed that across all species and life stages, the model with the smooth effect of phi was outperformed by most models. I've done some investigations with Federico and have concluded that the main cause of this is the depth-correction when going from concentration to pressure. Because if I calculate the metabolic index using pressure but assume a fixed depth, it performs similar to the concentration. Here's an example using Juvenile cod.
+
+(it's also very much possible I've misunderstood something and calculated things wrong; let me know if you see anything strange!).
+
+```{r echo=FALSE, eval=FALSE}
+# Read data
+d <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>%
+  rename(X = x, Y = y) %>% 
+  drop_na(depth) %>% 
+  mutate(depth_ct = depth - mean(depth),
+         depth_sc = depth_ct / sd(depth),
+         depth_sq = depth_sc^2,
+         year_f = as.factor(year),
+         quarter_f = as.factor(quarter)) %>% 
+  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
+                 flounder_juvenile, plaice_adult, plaice_juvenile),
+               names_to = "group", values_to = "density") %>% 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
+  filter(species == "cod" & life_stage == "juvenile")
+
+# save and post on gh
+write_csv(d, "R/supp-analysis/juv_cod.csv")
+```
+
+## Read data and calculate metabolic index
+
+```{r read data}
+d <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/supp-analysis/juv_cod.csv")
+
+# Read metabolic parameter estimates and left_join
+mi_pars <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") %>% 
+  filter(species == "cod")
+
+# Read size csv to calculate the metabolic index
+sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") %>% 
+  mutate(group = paste(species, name, sep = "_")) %>% 
+  dplyr::select(group, B) %>% 
+  filter(group == "cod_adult")
+
+# Before we can calculate the pressure based metabolic index, we'll need to convert oxygen from ml/L mg/L and partial pressure
+# Some conversions
+# oxygen: https://www.ices.dk/data/tools/Pages/Unit-conversions.aspx
+# pressure: https://bluerobotics.com/learn/pressure-depth-calculator/
+# First calculate pressure in pascal: p_tot = (r*g*h) + p_atm, then to kgPa and finally atm
+rho = 1.030 # density of water (kg/km^-3)
+p_atm = 1.01325 # atmospheric pressure
+g = 9.807 # gravity of earth
+
+# Convert to partial pressure oxygen from ml/L
+d$po2 <- DO.unit.convert(d$oxy*(1/0.7), # d$oxy is in unit ml/L so we first need to convert to mg/L
+                         DO.units.in = "mg/L", 
+                         DO.units.out = "PP", 
+                         bar.press = (rho*g*d$depth + p_atm),
+                         bar.units.in = "kpa",
+                         bar.units.out = "kpa",
+                         temp.C = 10, #d$temp,
+                         salinity = 10, # TODO: d$sal, # let's fix salinity for easier comparison. It has a minor effect in this range
+                         salinity.units = "pp.thou")
+# Convert to partial pressure oxygen from ml/L using observed depth!
+d$po2_obs <- DO.unit.convert(d$oxy*(1/0.7), # d$oxy is in unit ml/L so we first need to convert to mg/L
+                             DO.units.in = "mg/L", 
+                             DO.units.out = "PP", 
+                             bar.press = (rho*g*d$depth_obs + p_atm),
+                             bar.units.in = "atm",
+                             bar.units.out = "kpa",
+                             temp.C = d$temp,
+                             salinity = 10, # TODO: d$sal, # let's fix salinity for easier comparison. It has a minor effect in this range
+                             salinity.units = "pp.thou")
+
+# Plot pressure
+d$pressure <- (rho*g*d$depth + p_atm)
+d$pressure_obs <- (rho*g*d$depth_obs + p_atm)
+
+ggplot(d, aes(pressure, pressure_obs, color = depth)) + 
+  geom_point()
+
+plot_map + 
+  geom_point(data = d,
+             aes(X*1000, Y*1000, color = pressure)) + 
+  scale_color_viridis()
+
+# depth has an OK effect of pressure, so why does it look good then when I remove depth by setting it to 47?
+
+# Now do the same thing but for 47 m depth (mean in data). fd is for fixed depth!
+d$po2_fd <- DO.unit.convert(d$oxy*(1/0.7), # d$oxy is in unit ml/L so we first need to convert to mg/L
+                            DO.units.in = "mg/L", 
+                            DO.units.out = "PP", 
+                            bar.press = (rho*g*47 + p_atm),
+                            bar.units.in = "atm",
+                            bar.units.out = "kpa",
+                            temp.C = d$temp,
+                            salinity = 10, # TODO: d$sal, # let's fix salinity for easier comparison. It has a minor effect in this range
+                            salinity.units = "pp.thou")
+
+# Oxygen is ml/L, I *guess* we want micro mol/L. 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
+d$oxy_si <- (d$oxy * (10^3)) / 22.391
+
+# Calculate metabolic indices for a given mass and the temperature and oxygen in data
+# Line 123 in https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
+kb <- 0.000086173324 # Boltzmann's constant
+t_ref <- 15 # arbitrary reference temperature
+B <- sizes$B
+
+# Pressure parameters
+A0_po2 <- mi_pars$A0_po2 
+E_po2 <- mi_pars$E_po2
+n_po2 <- mi_pars$n_po2
+
+# Concentration parameters
+A0_o2 <- mi_pars$A0_o2
+E_o2 <- mi_pars$E_o2
+n_o2 <- mi_pars$n_o2
+
+# Calculate the metabolic index for pressure using depth-correct and not corrected partial pressure of oxygen
+# phi_fd is for fixed depth!
+# phi_c is for concentration but with Essington's 1st equation and parameters
+
+d <- d %>%
+  mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
+         phi = A0_po2*(B^n_po2)*po2 * exp((E_po2/kb)*inv_temp), # basic phi à la Essington
+         phi_obs = A0_po2*(B^n_po2)*po2_obs * exp((E_po2/kb)*inv_temp), # basic phi à la Essington
+         phi_fd = A0_po2*(B^n_po2)*po2_fd * exp((E_po2/kb)*inv_temp),
+         phi_c = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp))
+
+# Now calculate the metabolic index according to Deutsch's parameters based on oxygen concentration
+A_conc <- 9.7*10^-15 # because Deutsch's parameterization doesn't use a T_ref, this value is extremely different from Essington's intercept
+
+# Parameters n and E are from Deutsch SI
+d <- d %>%
+  mutate(T_K = temp + 273.15,
+         phi_deutsch = A_conc*(B^-0.21)*(oxy_si / exp(-0.72 / (kb * T_K))))
+```
+
+OK, now I know it's due to depth, and how oxygen changes non-linearly with depth when I switch unit. 
+
+```{r}
+# Generate some fake data based on regression fitted to my data
+set.seed(123)
+# Simulate some data..
+# summary(lm((d$oxy*(1/0.7)) ~ d$depth))
+n <- 500
+eps <- rnorm(n = n, mean = 0, sd = 0.1)
+
+df <- data.frame(depth = seq(0, 80, length.out = n))
+df$oxygen_conc <- 15 + df$depth*-0.12 + eps
+
+plot(df$depth, df$oxygen_conc)
+
+# Add in pressure!
+rho = 1.030 # density of water (kg/km^-3)
+p_atm = 1.01325 # atmospheric pressure
+g = 9.807 # gravity of earth
+
+df$pressure_kPa <- (rho*g*df$depth + p_atm)
+
+df$oxygen_p <- DO.unit.convert(df$oxy, DO.units.in = "mg/L", DO.units.out = "PP", bar.units.in = "kpa",
+                               bar.units.out = "kpa", temp.C = 10, salinity = 10, salinity.units = "pp.thou",
+                               bar.press = df$pressure_kPa) # Ignore temperature and salinity because that doesn’t drive the pattern
+
+plot(df$depth, df$pressure_kPa) # pressure v depth is linear
+plot(df$depth, df$oxygen_conc) # oxygen v depth is linear
+plot(df$depth, df$oxygen_p) # oxygen in pressue v depth is non-linear? Even increasing with depth?
+
+# Compare this with Essington's approach below (modified)
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#L2
+# This calculate oxygen SOLUBILITY, equations and parameters from: Oxygen solubility in seawater: Better fitting equations
+# Seems he's using Eq. 8 !
+
+# For this function, we need to use 1 ml/l = 103/22.391 = 44.661 μmol/l
+df$oxygen_conc_ml_l <- df$oxygen_conc*0.7
+
+df$oxygen_conc_micromol_l <- df$oxygen_conc_ml_l*44.661
+
+gsw_O2sol_SP_pt <- function(sal, temp) {
+  x = sal
+  ts = log((298.15 - temp)/(273.15 + temp))
+  
+  a0 =  5.80871
+  a1 =  3.20291
+  a2 =  4.17887
+  a3 =  5.10006
+  a4 = -9.86643e-2
+  a5 =  3.80369
+  b0 = -7.01577e-3
+  b1 = -7.70028e-3
+  b2 = -1.13864e-2
+  b3 = -9.51519e-3
+  c0 = -2.75915e-7
+  
+  O2sol = exp(a0 + ts*(a1 + ts*(a2 + ts*(a3 + ts*(a4 + a5*ts)))) + x*(b0 + ts*(b1 + ts*(b2 + b3*ts)) + c0*x))
+  return(O2sol)
+}
+
+gsw_O2sol_SP_pt(sal = 10, temp = 10) # Note this is a constant
+  
+df$sal <- 10
+df$temp <- 10
+
+df$O2sol <- gsw_O2sol_SP_pt(sal = df$sal, temp = df$temp)
+
+# Next, here's the function Tim uses to calculate pO2, that goes into the MI calculations
+#https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#L128
+
+calc_po2_mi <- function(O2sol, temp, depth, oxygen_conc_micromol_l) {
+  #O2 from trawl data is in ml/l - may need to be converted to umol/kg
+  gas_const = 8.31 # I guess this is gas constant!?
+  partial_molar_vol = 0.000032 #partial molar volume of O2 (m3/mol), https://github.com/kallisons/pO2_conversion/blob/master/pycode/function_pO2.py
+  kelvin = 273.15
+  #boltz = 0.000086173324
+  
+  #calculate percent saturation for O2 - assumes  units of mL O2/L
+  # Input:       S = Salinity (pss-78)
+  #              T = Temp (deg C) ! use potential temp
+  #depth is in meters
+  #[umole/kg] = [ml/L]*44660/(sigmatheta(P=0,theta,S) + 1000)
+  # dat$SA = gsw_SA_from_SP(dat$sal,dat$depth,dat$longitude_dd,dat$latitude_dd) #absolute salinity for pot T calc
+  # dat$pt = gsw_pt_from_t(dat$SA,dat$temp,dat$depth) #potential temp at a particular depth
+  # dat$CT = gsw_CT_from_t(dat$SA,dat$temp,dat$depth) #conservative temp
+  # dat$sigma0 = gsw_sigma0(dat$SA,dat$CT)
+  # dat$o2_umolkg = dat$o2*44660/(dat$sigma0+1000)
+  # 
+  # head(df$oxygen_conc_micromol_l)
+  # head(df$oxygen_conc_ml_l*44660/(gsw_sigma0(10, 10)+1000))
+  
+  #dat$O2_Sat0 = gsw_O2sol_SP_pt(dat$sal,dat$pt) # 
+  O2_Sat0 = O2sol
+    
+  #= o2satv2a(sal,pt) #uses practical salinity and potential temp - solubity at p =1 atm
+  press = exp(depth*10000*partial_molar_vol/gas_const/(temp+kelvin)) # this equation I don't know
+  #So, the equation in terms of P is: P = (R * T) / (Partial molar volume of oxygen)
+  
+  
+  
+  #dat$O2_satdepth = dat$O2_Sat0*dat$press # ah, because we don't have depth in the above function!
+  O2_satdepth = O2_Sat0*press
+  
+  #solubility at p=0
+  sol0 = O2_Sat0/0.209 # this i don't follow
+  sol_Dep = sol0*press
+  po2 = oxygen_conc_micromol_l/sol_Dep # this is the main equation, partial pressure is really just concentration / solubility! http://web.utk.edu/~rstrange/wfs550/html-con-pages/e-oxygen-in-water.html
+  # So I then need to understand how solubility changes with pressure... I already have it covered for oxygen.
+  po2 <- po2 * 101.325 # convert to kPa
+  
+  return(po2)
+  
+  #stop here
+}
+
+df$pO2 <- calc_po2_mi(df$O2sol, df$temp, df$depth, df$oxygen_conc_micromol_l)
+
+plot(df$depth, df$pO2)
+
+df$press = exp(df$depth*10000*partial_molar_vol/gas_const/(df$temp+kelvin))
+
+plot(df$depth, df$press)
+
+ggplot() + 
+  geom_point(data = df, aes(depth, pO2, color = "pO2")) + 
+  geom_point(data = df, aes(depth, oxygen_conc, color = "oxy"))
+
+# Simulate some data..
+# summary(lm((d$oxy*(1/0.7)) ~ d$depth))
+
+```
+
+TODO: wrap this up... and send to Julia... tell her I can ask Tim also... Here's what I know:
+
+```{r calculate po2 a la Tim}
+# This function is based on the following paper: "Oxygen solubility in seawater: Better fitting equations". Seems he's using Eq. 8!
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#LL2C1-L21C2
+gsw_O2sol_SP_pt <- function(sal,pt) {
+  x = sal
+  pt68 = pt*1.00024
+  y = log((298.15 - pt68)/(273.15 + pt68))
+  
+  a0 =  5.80871
+  a1 =  3.20291
+  a2 =  4.17887
+  a3 =  5.10006
+  a4 = -9.86643e-2
+  a5 =  3.80369
+  b0 = -7.01577e-3
+  b1 = -7.70028e-3
+  b2 = -1.13864e-2
+  b3 = -9.51519e-3
+  c0 = -2.75915e-7
+  
+  O2sol = exp(a0 + y*(a1 + y*(a2 + y*(a3 + y*(a4 + a5*y)))) + x*(b0 + y*(b1 + y*(b2 + b3*y)) + c0*x))
+  return(O2sol)
+}
+
+
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R#L88C4-L117
+calc_po2_mi <- function(dat) {
+  #O2 from trawl data is in ml/l - may need to be converted to umol/kg
+  gas_const = 8.31
+  partial_molar_vol = 0.000032
+  kelvin = 273.15
+  #boltz = 0.000086173324
+  
+  #calculate percent saturation for O2 - assumes  units of mL O2/L
+  # Input:       S = Salinity (pss-78)
+  #              T = Temp (deg C) ! use potential temp
+  #depth is in meters
+  #[umole/kg] = [ml/L]*44660/(sigmatheta(P=0,theta,S) + 1000)
+
+  # dat$SA = gsw_SA_from_SP(dat$sal,dat$depth,dat$longitude_dd,dat$latitude_dd) #absolute salinity for pot T calc
+  # dat$pt = gsw_pt_from_t(dat$SA,dat$temp,dat$depth) #potential temp at a particular depth
+  # dat$CT = gsw_CT_from_t(dat$SA,dat$temp,dat$depth) #conservative temp
+  # dat$sigma0 = gsw_sigma0(dat$SA,dat$CT)
+  # dat$o2_umolkg = dat$o2*44660/(dat$sigma0+1000)
+  
+  # ml: I don't think I need the 5 lines above, because I already have oxygen in unit micro mol per kg
+
+  dat$O2_Sat0 = gsw_O2sol_SP_pt(dat$sal,dat$pt) # ml: this is from the function above, and returns the solubility of oxygen as a function of temperature and salinity
+  
+  #= o2satv2a(sal,pt) #uses practical salinity and potential temp - solubity at p =1 atm
+  dat$press = exp(dat$depth*10000*partial_molar_vol/gas_const/(dat$temp+kelvin)) # ml: I'm not sure what this equation refers to! and why is it exp() ?
+  #dat$O2_satdepth = dat$O2_Sat0*dat$press # ml: this is not used... don't worry about it
+  
+  #solubility at p=0
+  dat$sol0 = dat$O2_Sat0/0.209 # ml: this I don't know either! why 0.209? we need it to calculate po2
+  dat$sol_Dep = dat$sol0*dat$press
+  dat$po2 = dat$o2_umolkg/dat$sol_Dep
+  dat$po2 <- dat$po2 * 101.325 # convert to kPa
+  
+  #stop here, no need to calculate mi
+}
+```
+
+
+
+```{r chat version...}
+# calc_pO2 <- function(data) {
+#   a_0 <- 5.80871
+#   a_1 <- 3.20291
+#   a_2 <- 4.17887
+#   a_3 <- 5.10006
+#   a_4 <- -9.86643e-2
+#   a_5 <- 3.80369
+#   b_0 <- -7.01577e-3
+#   b_1 <- -7.70028e-3
+#   b_2 <- -1.13864e-2
+#   b_3 <- -9.51519e-3
+#   c_0 <- -2.75915E-7
+#   
+#   data$tt <- 298.15 - data$temp
+#   data$tk <- 273.15 + data$temp
+#   data$ts <- log(data$tt / data$tk)
+#   
+#   # Correct for pressure at depth
+#   V <- 32e-6  # partial molar volume of O2 (m3/mol)
+#   R <- 8.31  # Gas constant [J/mol/K]
+#   db2Pa <- 1e4  # convert pressure: decibar to Pascal
+#   atm2Pa <- 1.01325e5  # convert pressure: atm to Pascal
+#   
+#   # Calculate pressure in dB from depth in m
+#   # Let zdepth = z[g=temp_rcp[d=2]]
+#   # Let zgrid = temp_rcp[d=2]*0+zdepth
+#   # Let ztop = zgrid * (1.0076 + zgrid * (2.3487e-06 - zgrid * 1.2887e-11))
+#   
+#   # Convert pressure from decibar to pascal
+#   data$dp <- data$pres * db2Pa
+#   data$pCor <- exp((V * data$dp) / (R * (data$temp + 273.15)))
+#   
+#   # Let o2_alpha = (o2_saturation / 0.21)  #0.21 is atm composition of O2
+#   # Let kh = o2_alpha * pCor
+#   # Let po2_raw = (o2_rcp[d=1] / kh) * 101.32501   #convert po2 from atm to kPa
+#   
+#   data$o2_sat <- exp(a_0 + a_1 * data$ts + a_2 * data$ts^2 + a_3 * data$ts^3 + a_4 * data$ts^4 + a_5 * data$ts^5 + data$sal * (b_0 + b_1 * data$ts + b_2 * data$ts^2 + b_3 * data$ts^3) + c_0 * data$sal^2)
+#   
+#   data$o2_alpha <- data$o2_sat / 0.21  # 0.21 is atmospheric composition of O2
+#   data$kh <- data$o2_alpha * data$pCor
+#   data$po2 <- (data$oxygen / data$kh) * 101.32501  # convert po2 from atm to kPa
+#   
+#   return(data[c("oxygen", "pres", "sal", "temp", "po2")])
+# }
+```
+
+
+Ok, now we have 4 different metabolic indices, all using Essington's parameters. We have the original Essington's pressue phi (phi), we have Essington's pressure phi but for a fixed depth (phi_fd), phi estimated like Essington but using concentration units (phi_c), and we have Deutsch's phi based on concentration (phi_conc). Let's see how they compare!
+
+```{r}
+# Plot oxygen concentration vs oxygen pressure
+ggplot(d, aes(oxy, po2, color = depth)) + 
+  geom_point() + 
+  geom_smooth(color = "tomato3") +
+  scale_color_viridis()
+
+ggplot() + 
+  geom_point(data = d, aes(depth, oxy, color = "conc")) + 
+  geom_point(data = d, aes(depth, po2, color = "po2"))
+
+# scale 
+d2 <- d |> 
+  mutate(oxy_sc = (oxy - mean(oxy, na.rm = TRUE)) / sd(oxy, na.rm = TRUE),
+         po2_sc = (po2 - mean(po2, na.rm = TRUE)) / sd(po2, na.rm = TRUE)) 
+
+ggplot() + 
+  geom_point(data = d2, aes(depth, oxy_sc, color = "conc"), alpha = 0.6) + 
+  geom_point(data = d2, aes(depth, po2_sc, color = "po2"), alpha = 0.6)
+
+ggplot(d, aes(depth, phi_c)) + 
+  geom_point() + 
+  geom_smooth() 
+
+# Even increasing with depth!
+ggplot(d, aes(depth, phi)) + 
+  geom_point() + 
+  geom_smooth()
+  
+# Even increasing with depth!
+ggplot(d, aes(depth, po2)) + 
+  geom_point() + 
+  geom_smooth()
+
+# Plot phi and phi_fd vs phi_conc
+# These are similar because without depth, not that much differences between oxygen pressure and concentration
+ggplot(d, aes(phi_deutsch, phi_fd, color = depth)) + 
+  geom_point() +
+  scale_color_viridis()
+
+ggplot(d, aes(phi_deutsch, phi_c, color = depth)) + 
+  geom_point() +
+  scale_color_viridis()
+
+# This has a familiar shape (po2 vs oxy2)
+ggplot(d, aes(phi_c, phi, color = depth)) + 
+  geom_point() +
+  scale_color_viridis()
+
+# And it is still there even when using observed depth..., so it must go back to how depth affects the pressure.
+ggplot(d, aes(phi_c, phi_obs, color = depth)) + 
+  geom_point() +
+  scale_color_viridis()
+
+# Now plot the distribution metabolic indices
+d %>% 
+  pivot_longer(c(phi, phi_c, phi_fd, phi_deutsch)) %>% 
+  ggplot(aes(value, fill = name, color = name)) + 
+  geom_density(trim = TRUE, alpha = 0.3) + 
+  scale_color_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey20") + 
+  coord_cartesian(expand = 0) + 
+  facet_wrap(~name, ncol = 1)
+
+# Ok, at first glance the concentration-based index using Essington's equation has a much smaller range... Not sure why! Deutsch's index isn't. But these low values do seem to match the SI figure in Deutsch et al 2015
+dplot <- d %>% 
+  pivot_longer(c(phi, phi_c, phi_fd, phi_deutsch), 
+               names_to = "mi_type") %>% 
+  group_by(mi_type) %>% 
+  mutate(value_sc = value / max(value, na.rm = TRUE))
+
+# Plot in space across all years
+plot_map + 
+  geom_point(data = dplot, aes(X*1000, Y*1000, color = value_sc), size = 0.6) + 
+  facet_wrap(~mi_type) +
+  scale_color_viridis()
+
+
+p1 <- plot_map + 
+  geom_point(data = dplot %>% filter(mi_type == "phi"),
+             aes(X*1000, Y*1000, color = po2), size = 0.6) + 
+  scale_color_viridis()
+
+p2 <- plot_map + 
+  geom_point(data = dplot %>% filter(mi_type == "phi_c"),
+             aes(X*1000, Y*1000, color = oxy), size = 0.6) + 
+  scale_color_viridis()
+
+library(patchwork)
+
+p1 + p2
+
+
+
+p1 <- plot_map + 
+  geom_point(data = dplot %>% filter(mi_type == "phi"),
+             aes(X*1000, Y*1000, color = po2 / max(po2, na.rm = TRUE)), size = 0.6) + 
+  scale_color_viridis()
+
+p2 <- plot_map + 
+  geom_point(data = dplot %>% filter(mi_type == "phi_c"),
+             aes(X*1000, Y*1000, color = oxy / max(oxy, na.rm = TRUE)), size = 0.6) + 
+  scale_color_viridis()
+
+p1 + p2
+
+
+
+
+
+ggplot() + 
+  geom_point(data = dplot, aes(temp, depth, color = value), size = 0.1) + 
+  facet_wrap(~mi_type) +
+  scale_y_reverse() + 
+  scale_color_viridis()
+
+ggplot() + 
+  geom_point(data = dplot, aes(oxy, depth, color = value), size = 0.1) + 
+  facet_wrap(~mi_type) +
+  scale_y_reverse() + 
+  scale_color_viridis()
+
+# Plot correlation between variables
+```
+
+## Scale variables
+
+```{r}
+d <- d %>% 
+  group_by(group) %>% 
+  mutate(phi_deutsch_sc = scale(phi_deutsch),
+         phi_c_sc = scale(phi_c),
+         phi_sc = scale(phi),
+         phi_fd_sc = scale(phi_fd),
+         temp_sc = scale(temp),
+         oxy_sc = scale(oxy),
+         depth_sc = scale(depth)) %>% 
+  ungroup() %>% 
+  drop_na(phi) %>% 
+  drop_na(sal)
+
+# Plot correlation between variables
+d_cor <- d %>% dplyr::select("phi_deutsch_sc", "phi_c_sc", "phi_sc", "phi_fd_sc",
+                             "temp_sc", "oxy_sc", "depth_sc")
+
+corr <- round(cor(d_cor), 2)
+ggcorrplot(corr, hc.order = TRUE, lab = TRUE, lab_size = 2.5) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.3))
+
+# Interestingly, the basic pressure based phi has the lowest correlation with depth
+```
+
+```{r fit models, cache=TRUE, warning=FALSE, message=FALSE}
+dd <- d %>%
+  drop_na(density) %>% 
+  drop_na(phi_deutsch_sc, phi_c_sc, phi_fd_sc, phi_sc)
+
+mesh <- make_mesh(dd, c("X", "Y"), n_knots = 150)
+
+# This model generally outperforms the standard phi model, but not phi that is concentration-based
+m1 <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(depth_sc) + oxy_sc*temp_sc,
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+m2 <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(depth_sc) + s(phi_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+    
+m3 <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(depth_sc) + s(phi_fd_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+    
+m4 <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(depth_sc) + s(phi_c_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+m5 <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(depth_sc) + s(phi_deutsch_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+AIC(m1, m2, m3, m4, m5) %>% 
+  tibble::rownames_to_column("model") %>% 
+  arrange(AIC)
+```
+
+Refit models without depth
+
+```{r no depth, cache=TRUE, warning=FALSE, message=FALSE}
+# This model generally outperforms the standard phi model, but not phi that is concentration-based
+m1b <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + oxy_sc*temp_sc,
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+m2b <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+    
+m3b <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_fd_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+    
+m4b <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_c_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+m5b <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_deutsch_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "on", time = "year", spatiotemporal = "off")
+
+AIC(m1b, m2b, m3b, m4b, m5b) %>% 
+  tibble::rownames_to_column("model") %>% 
+  arrange(AIC)
+```
+
+... And without spatial random effect
+
+```{r no random, cache=TRUE, warning=FALSE, message=FALSE}
+# This model generally outperforms the standard phi model, but not phi that is concentration-based
+m1c <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + oxy_sc*temp_sc,
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "off", time = "year", spatiotemporal = "off")
+
+m2c <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "off", time = "year", spatiotemporal = "off")
+    
+m3c <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_fd_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "off", time = "year", spatiotemporal = "off")
+    
+m4c <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_c_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "off", time = "year", spatiotemporal = "off")
+
+m5c <- sdmTMB(
+  density ~ 0 + year_f + quarter_f + s(phi_deutsch_sc),
+  data = dd, mesh = mesh, family = tweedie(link = "log"),
+  spatial = "off", time = "year", spatiotemporal = "off")
+
+AIC(m1c, m2c, m3c, m4c, m5c) %>% 
+  tibble::rownames_to_column("model") %>% 
+  arrange(AIC)
+```
+
+```{r}
+#visreg(m4, xvar = "phi_c_sc")
+```

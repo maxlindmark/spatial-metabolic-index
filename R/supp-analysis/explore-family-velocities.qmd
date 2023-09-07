@@ -1,0 +1,650 @@
+---
+title: "Fit velocity models"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+This scripts fits models to gridded predictions of biomass velocities as a function of climate velocities (from climate-agnostic sdm, "04-fit-sdms-random.qmd")
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "rMR", "ggridges",
+          "kableExtra", "viridis", "RColorBrewer", "here", "sdmTMBextra") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(sdmTMB)
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Read and plot data
+
+```{r}
+# Read from GH?
+d <- read_csv(paste0(home, "/data/clean/velocities.csv")) |> 
+  #mutate(quarter_f = as.factor(quarter)) |> 
+  filter(quarter == 4) # probably there are ways to model this but for now we focus on Q4 because it's warmer and with less oxygen
+
+```
+
+## Fit sdmTMB models of biomass velocities as a function of phi velocities
+
+```{r}  
+#coefs <- list()
+#pred_velo1 <- list()
+#pred_velo2 <- list()
+
+#for(i in unique(d$group)){
+ 
+  i <- "Cod_Juvenile"
+  dd <- filter(d, group == i)
+  
+  dd <- dd |>
+    filter(bio_vel < quantile(bio_vel, probs = 0.95) & bio_vel > quantile(bio_vel, probs = 0.05))
+  
+  hist(dd$bio_vel)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+
+  # ggplot(dd, aes(phi_vel_sc, bio_vel)) + 
+  #   geom_point() + 
+  #   geom_smooth()
+  
+    m0 <- sdmTMB(bio_vel ~ phi_vel_sc * mean_phi_ct + mean_log_biomass_ct,
+      mesh = mesh,
+      data = dd,
+      family = student(df = 5), 
+      spatial = "off",
+      spatiotemporal = "off"
+      )
+  
+    m1 <- sdmTMB(bio_vel ~ phi_vel_sc * mean_phi_ct + mean_log_biomass_ct,
+      mesh = mesh,
+      data = dd,
+      family = student(df = 5), 
+      spatial = "on",
+      spatiotemporal = "off"
+      )
+    
+    m2 <- sdmTMB(bio_vel ~ s(phi_vel_sc) + mean_log_biomass_ct,
+      mesh = mesh,
+      data = dd,
+      family = student(df = 5), 
+      spatial = "on",
+      spatiotemporal = "off"
+      )
+    
+    # Quick and dirty residuals
+    res0 <- residuals(m0)
+    res1 <- residuals(m1)
+    res2 <- residuals(m2)
+    
+    qqnorm(res0);qqline(res0)
+    qqnorm(res1);qqline(res1)
+    qqnorm(res2);qqline(res2)
+    
+    # p0 <- ggplot(dd, aes(sample = res0)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = m0) +
+    #     theme(aspect.ratio = 1)
+    # 
+    # p1 <- ggplot(dd, aes(sample = res1)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = m1) +
+    #     theme(aspect.ratio = 1)
+    #     
+    # p2 <- ggplot(dd, aes(sample = res2)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = m2) +
+    #     theme(aspect.ratio = 1)
+    # 
+    # p0 + p1 + p2
+    
+    
+    # Spatial residuals??
+    dd$res <- res
+    
+    plot_map + 
+      geom_point(data = dd, aes(X*1000, Y*1000, color = res)) + 
+      scale_color_gradient2()
+    
+# Better residuals 
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+
+    # Correlations instead??
+    
+    ggplot(d, aes(bio_vel)) +
+      geom_histogram() + 
+      facet_wrap(~group, scales = "free")
+    
+    dd_cor <- d |> 
+      group_by(group) |> 
+      mutate(mean_temp_quantile = cut(mean_temp_ct, unique(quantile(mean_temp_ct, seq(0, 1, 0.01))), labels = FALSE))
+      
+    ggplot(dd_cor, aes(mean_temp_quantile, mean_temp_ct)) + geom_point() + facet_wrap(~group)
+    
+    dd_cor <- dd_cor |> 
+      group_by(group, mean_temp_quantile) |> 
+      summarise(cor_bio_temp = cor(bio_vel, temp_vel_sc),
+                n = n()) |> 
+      separate(group, into = c("species", "life_stage"), remove = FALSE)
+      
+    dd_cor |> drop_na(cor_bio_temp) |> arrange(n)
+    
+    pal <- brewer.pal(name = "Dark2", n = 8)[3:8]
+
+    ggplot(dd_cor, aes(mean_temp_quantile, cor_bio_temp, color = group, fill = group)) + 
+      geom_point(alpha = 0.4) + 
+      geom_smooth(formula = y~s(x, k=3), method = "gam") +
+      scale_color_manual(values = c(rev(pal), "grey40")) +
+      scale_fill_manual(values = c(rev(pal), "grey40")) +
+      facet_grid(life_stage ~ species) +
+      geom_hline(yintercept = 0, linetype = 2) + 
+      labs(fill = "", color = "", x = "Percentile of mean temperature", y = "Biotic vs. temperature correlation") +
+      theme(legend.position = "bottom")
+
+ggsave(paste0(home, "/figures/supp/quantile_cor.pdf"), width = 17, height = 14, units = "cm")
+
+
+    # ggplot(dd_cor, aes(mean_temp_quantile, cor_bio_temp, color = group, fill = group)) + 
+    #   geom_point(alpha = 0.4) + 
+    #   geom_smooth(formula = y~s(x, k=4), aes(mean_temp_quantile, cor_bio_temp), method = "gam", inherit.aes = FALSE) +
+    #   scale_color_manual(values = c(rev(pal), "grey40")) +
+    #   scale_fill_manual(values = c(rev(pal), "grey40")) +
+    #   #facet_grid(life_stage ~ species) +
+    #   geom_hline(yintercept = 0, linetype = 2) + 
+    #   labs(fill = "", color = "", x = "Percentile of mean temperature", y = "Biotic vs. temperature correlation") +
+    #   theme(legend.position = "bottom")
+    
+```
+
+# Read the prediction grid to left join the ices rectangles
+
+```{r}
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv"))) |> 
+  dplyr::select(X, Y, ices_rect)
+
+d_grid <- d |> left_join(pred_grid, by = c("X", "Y"))
+
+names(d_grid)
+
+# Take mean of ices rect
+library(mapplots)
+d_grid2 <- d_grid |> 
+  group_by(ices_rect, group) |> 
+  summarise(across(c("bio_vel", "phi_vel_sc", "mean_phi_ct", "mean_log_biomass_ct",
+                     "temp_vel_sc", "mean_temp_ct", "mean_log_biomass_ct"), mean)) |> 
+  mutate(lat = ices.rect(ices_rect)$lat,
+         lon = ices.rect(ices_rect)$lon)
+
+ggplot(d_grid2, aes(lon, lat, fill = bio_vel)) + 
+  geom_tile() + 
+  facet_wrap(~group, ncol = 3, scales = "free") + 
+  scale_fill_gradient2()
+
+# Fit to ICES rectangle trends
+for(i in unique(d_grid2$group)){
+  
+  dd <- filter(d_grid2, group == i)
+  
+  hist(dd$bio_vel)
+  
+  #mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 7) # Need specific meshes because not for all hauls did we record all species
+  
+  # print(
+  #   ggplot() +
+  #     inlabru::gg(mesh$mesh) +
+  #     coord_fixed() +
+  #     geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+  #     annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+  #     labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+  #   )
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ phi_vel_sc * mean_phi_ct + mean_log_biomass_ct,
+      mesh = mesh,
+      data = dd,
+      #family = student(df = 4), 
+      #anisotropy = TRUE,
+      #spatial = "on",
+      spatial = "off",
+      spatiotemporal = "off"#,
+      #control = sdmTMBcontrol(newton_loops = 2, nlminb_loops = 2)
+      )
+    
+    summary(m) 
+    sanity(m) 
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    # Spatial residuals??
+    dd$res <- res
+    
+    plot_map + 
+      geom_point(data = dd, aes(X*1000, Y*1000, color = res)) + 
+      scale_color_gradient2()
+}
+
+# TODO: make some plots... 
+
+```
+
+
+```{r}
+knitr::knit_exit()
+```
+
+## Fit sdmTMB models of biomass velocities as a function of temperature velocities, given mean temperature
+
+```{r}
+pred_velo_temp <- list()
+pred_velo_temp2 <- list()
+
+for(i in unique(d_grid2$group)){
+  
+  dd <- filter(d_grid2, group == i)
+  # 
+  # mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  # 
+  # print(
+  #   ggplot() +
+  #     inlabru::gg(mesh$mesh) +
+  #     coord_fixed() +
+  #     geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+  #     annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+  #     labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+  #   )
+  
+    #ggsave(paste0(home, "/figures/supp/mesh/08_velocity_temp_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ temp_vel_sc * mean_temp_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                family = gaussian(), 
+                #family = student(df = 10), 
+                #spatial = "on",
+                spatial = "off",
+                spatiotemporal = "off")
+    
+    sanity(m)
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    # ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_temp_", i, ".pdf"),
+    #        width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+    nd <- data.frame(temp_vel_sc = c(0, 1, 0, 1),
+                     mean_temp_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_temp_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_0 = c(pred[1, ], pred[3, ]),
+      est_change = c(pred[2, ], pred[4, ])) # change is increase
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0, # if delta_bio_vel is positive, biomass goes up with 1 increase in temp
+             mean_clim = ifelse(mean_temp_ct == low_mean_clim, 
+                                "low_temperature", "high_temperature"),
+             group = i)
+    
+   pred_velo_temp[[i]] <- pred 
+   
+
+}
+
+pred_velo_temp <- dplyr::bind_rows(pred_velo_temp) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+#write_csv(pred_velo_temp, paste0(home, "/output/pred_temp_velo.csv"))
+
+
+### Plot
+pred_velo_temp2 <- pred_velo_temp |>
+  mutate(mean_clim = ifelse(mean_clim == "low_temperature", "Cold", "Warm")) |>
+  mutate(id2 = paste(species, life_stage))
+  
+order <- pred_velo_temp2 |>
+  group_by(id2, mean_clim) |> 
+  summarise(mean_delta = mean(delta_bio_vel)) |> 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+  mutate(diff = `Warm` - `Cold`) |> 
+  arrange(desc(diff)) |> 
+  mutate(Expected = ifelse(Cold > Warm, "Yes", "No"))
+
+order
+
+pred_velo_temp2 <- pred_velo_temp2 |> 
+  left_join(order |> dplyr::select(Expected), by = "id2")
+
+pred_velo_temp2$id2 <- factor(pred_velo_temp2$id2, levels = c(order$id2))
+                                 
+pred_velo_temp2 |>
+  ggplot(aes(delta_bio_vel, id2, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+  geom_density_ridges(color = NA) +
+  scale_fill_manual(values = c("steelblue2", "tomato3")) +
+  scale_alpha_manual(values = c(0.4, 0.8)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\nincrease in temperature velocity", fill = "Mean temperature") +
+  theme(legend.direction = "vertical") +
+  NULL
+```
+
+## Fit sdmTMB models of biomass velocities as a function of oxygen velocities, given mean oxygen
+
+```{r}
+pred_velo_oxy <- list()
+pred_velo_oxy2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    #ggsave(paste0(home, "/figures/supp/mesh/08_velocity_oxy_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ oxy_vel_sc * mean_oxy_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                #family = gaussian(), 
+                family = student(df = 5),
+                spatial = "on",
+                spatiotemporal = "off")
+  
+    sanity(m) 
+  
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+    
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    # ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_oxy_", i, ".pdf"),
+    #        width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+    
+    nd <- data.frame(oxy_vel_sc = c(-1, 0, -1, 0),
+                     mean_oxy_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_oxy_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_change = c(pred[1, ], pred[3, ]),
+      est_0 = c(pred[2, ], pred[4, ])
+      )
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0,
+             mean_clim = ifelse(mean_oxy_ct == low_mean_clim, 
+                                "low_oxygen", "high_oxygen"),
+             group = i)
+    
+    pred_velo_oxy[[i]] <- pred
+
+}
+
+pred_velo_oxy <- dplyr::bind_rows(pred_velo_oxy) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+#write_csv(pred_velo_oxy, paste0(home, "/output/pred_oxy_velo.csv"))
+```
+
+## What is the effect of temperature given oxygen? first check correlation
+
+```{r}
+d |> group_by(group) |> summarise(cor = cor(temp_vel_sc, oxy_vel_sc))
+```
+
+## Fit sdmTMB models of biomass velocities as a function of temperature velocities, given mean oxygen
+
+```{r}
+pred_velo_temp_o <- list()
+pred_velo_temp2_o <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    #ggsave(paste0(home, "/figures/supp/mesh/08_velocity_temp_o_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ temp_vel_sc * mean_oxy_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                #family = gaussian(), 
+                family = student(df = 5), 
+                spatial = "on",
+                spatiotemporal = "off")
+    
+    sanity(m)
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+  
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    # ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_temp_o_", i, ".pdf"),
+    #        width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+    nd <- data.frame(temp_vel_sc = c(0, 1, 0, 1),
+                     mean_oxy_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_oxy_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_0 = c(pred[1, ], pred[3, ]),
+      est_change = c(pred[2, ], pred[4, ])) # change is increase in temp
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0, # if delta_bio_vel is positive, biomass goes up with 1 increase in temp
+             mean_clim = ifelse(mean_oxy_ct == low_mean_clim, 
+                                "low_oxygen", "high_oxygen"),
+             group = i)
+    
+    pred_velo_temp_o[[i]] <- pred
+
+}
+
+pred_velo_temp_o <- dplyr::bind_rows(pred_velo_temp_o) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+#write_csv(pred_velo_temp, paste0(home, "/output/pred_temp_o_velo.csv"))
+```
+
+```{r}
+knitr::knit_exit()
+```
