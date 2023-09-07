@@ -1,0 +1,499 @@
+---
+title: "Fit velocity models"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+This scripts fits models to gridded predictions of biomass velocities as a function of climate velocities (from climate-agnostic sdm, "04-fit-sdms-random.qmd")
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "rMR", "ggridges",
+          "kableExtra", "viridis", "RColorBrewer", "here", "sdmTMBextra") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(sdmTMB)
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Read and plot data
+
+```{r}
+# Read from GH?
+d <- read_csv(paste0(home, "/data/clean/velocities.csv")) |> 
+  #mutate(quarter_f = as.factor(quarter)) |> 
+  filter(quarter == 4) # probably there are ways to model this but for now we focus on Q4 because it's warmer and with less oxygen
+```
+
+## Fit sdmTMB models of biomass velocities as a function of phi velocities
+
+```{r}  
+#coefs <- list()
+pred_velo1 <- list()
+#pred_velo2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    ggsave(paste0(home, "/figures/supp/mesh/08_velocity_phi_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ phi_vel_sc * mean_phi_ct + mean_log_biomass_ct,
+      mesh = mesh,
+      data = dd,
+      family = student(df = 7), 
+      spatial = "on",
+      spatiotemporal = "off"
+      )
+    
+    sanity(m) 
+  
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_phi_", i, ".pdf"),
+           width = 11, height = 11, units = "cm")
+  
+    # Save coefficients??
+    #coefs[[i]] <- tidy(m, conf.int = TRUE) |> mutate(group = i)
+    
+    # Now predict the biotic velocity for high and low temperature with a sd change in the climate velocity
+    low_mean_clim <- as.numeric(quantile(dd$mean_phi_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_phi_ct, prob = 0.95))
+    
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+    # Predict
+    nd <- data.frame(phi_vel_sc = c(-1, 0, -1, 0),
+                     mean_phi_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    # one column is on iteration, one row is one nd row!
+    pred <- data.frame(
+      mean_phi_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim), # see head(nd)
+      est_change = c(pred[1, ], pred[3, ]), # see head(nd), these are declines in phi given low and high mean clim
+      est_0 = c(pred[2, ], pred[4, ])) # see head(nd), these are the baseline average phi given low and high mean clim
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0, # if bio trend is positive, bio increases with declines in phi
+             mean_clim = ifelse(mean_phi_ct == low_mean_clim, 
+                                "low_phi", "high_phi"),
+             group = i)
+    
+    pred_velo1[[i]] <- pred
+    
+    # Now make a prediction across a range of velocities
+    # Again I'm predicting for the range of the specific model
+    # nd3 <- data.frame(expand.grid(phi_vel_sc = seq(quantile(dd$phi_vel_sc, probs = 0.05),
+    #                                                quantile(dd$phi_vel_sc, probs = 0.95),
+    #                                                length.out = 50),
+    #                               mean_phi_ct = c(low_mean_clim, high_mean_clim))) |> 
+    #   mutate(mean_log_biomass_ct = mean_log_biomass_ct)
+    # 
+    # pred3 <- predict(m, newdata = nd3, se_fit = TRUE, re_form = NA)
+    # 
+    # pred3 <- pred3 |> 
+    #   mutate(lwr = est - 1.96*est_se,
+    #          upr = est + 1.96*est_se, 
+    #          group = i)
+    # 
+    # pred_velo2[[i]] <- pred3
+    # 
+    # ggplot(pred3, aes(phi_vel_sc, est, color = factor(mean_phi_ct))) + geom_line()
+  
+}
+
+# phi_coefs <- dplyr::bind_rows(coefs) |> 
+#   mutate(sig = "N",
+#          sig = ifelse(estimate < 0 & conf.high < 0, "Y", sig),
+#          sig = ifelse(estimate > 0 & conf.low > 0, "Y", sig))
+
+phi_pred_delta <- dplyr::bind_rows(pred_velo1) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+# phi_pred <- dplyr::bind_rows(pred_velo2) |> 
+#   separate(group, c("species", "life_stage"),
+#            sep = "_", remove = FALSE) |> 
+#   mutate(species = str_to_title(species),
+#          life_stage = str_to_title(life_stage))
+
+#write_csv(phi_coefs, paste0(home, "/output/phi_velo_coefs.csv"))
+write_csv(phi_pred_delta, paste0(home, "/output/pred_phi_velo_delta.csv"))
+#write_csv(phi_pred, "/output/pred_phi_velo.csv")
+```
+
+## Fit sdmTMB models of biomass velocities as a function of temperature velocities, given mean temperature
+
+```{r}
+pred_velo_temp <- list()
+pred_velo_temp2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    ggsave(paste0(home, "/figures/supp/mesh/08_velocity_temp_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ temp_vel_sc * mean_temp_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                #family = gaussian(), 
+                family = student(df = 7), 
+                spatial = "on",
+                spatiotemporal = "off")
+    
+    sanity(m)
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_temp_", i, ".pdf"),
+           width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_temp_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+    nd <- data.frame(temp_vel_sc = c(0, 1, 0, 1),
+                     mean_temp_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_temp_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_0 = c(pred[1, ], pred[3, ]),
+      est_change = c(pred[2, ], pred[4, ])) # change is increase
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0, # if delta_bio_vel is positive, biomass goes up with 1 increase in temp
+             mean_clim = ifelse(mean_temp_ct == low_mean_clim, 
+                                "low_temperature", "high_temperature"),
+             group = i)
+    
+    pred_velo_temp[[i]] <- pred
+
+}
+
+pred_velo_temp <- dplyr::bind_rows(pred_velo_temp) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+write_csv(pred_velo_temp, paste0(home, "/output/pred_temp_velo_delta.csv"))
+```
+
+## Fit sdmTMB models of biomass velocities as a function of oxygen velocities, given mean oxygen
+
+```{r}
+pred_velo_oxy <- list()
+pred_velo_oxy2 <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    ggsave(paste0(home, "/figures/supp/mesh/08_velocity_oxy_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ oxy_vel_sc * mean_oxy_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                #family = gaussian(), 
+                family = student(df = 7),
+                spatial = "on",
+                spatiotemporal = "off")
+  
+    sanity(m) 
+  
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+    
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_oxy_", i, ".pdf"),
+           width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+    
+    nd <- data.frame(oxy_vel_sc = c(-1, 0, -1, 0),
+                     mean_oxy_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_oxy_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_change = c(pred[1, ], pred[3, ]),
+      est_0 = c(pred[2, ], pred[4, ])
+      )
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0,
+             mean_clim = ifelse(mean_oxy_ct == low_mean_clim, 
+                                "low_oxygen", "high_oxygen"),
+             group = i)
+    
+    pred_velo_oxy[[i]] <- pred
+
+}
+
+pred_velo_oxy <- dplyr::bind_rows(pred_velo_oxy) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+write_csv(pred_velo_oxy, paste0(home, "/output/pred_oxy_velo_delta.csv"))
+```
+
+## What is the effect of temperature given oxygen? first check correlation
+
+```{r}
+d |> group_by(group) |> summarise(cor = cor(temp_vel_sc, oxy_vel_sc))
+```
+
+## Fit sdmTMB models of biomass velocities as a function of temperature velocities, given mean oxygen
+
+```{r}
+pred_velo_temp_o <- list()
+pred_velo_temp2_o <- list()
+
+for(i in unique(d$group)){
+  
+  dd <- filter(d, group == i)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+  
+  print(
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
+  
+    ggsave(paste0(home, "/figures/supp/mesh/08_velocity_temp_o_", i, ".pdf"), width = 17, height = 17, units = "cm")
+
+    print(i)
+    
+    m <- sdmTMB(bio_vel ~ temp_vel_sc * mean_oxy_ct + mean_log_biomass_ct,
+                mesh = mesh,
+                data = dd,
+                #family = gaussian(), 
+                family = student(df = 7), 
+                spatial = "on",
+                spatiotemporal = "off")
+    
+    sanity(m)
+    
+    # Plot residuals
+    # samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    # mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    # 
+    # print(
+    #   ggplot(dd, aes(sample = mcmc_res)) +
+    #     stat_qq() +
+    #     stat_qq_line() +
+    #     labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+    #     theme(aspect.ratio = 1)
+    #   )
+  
+    # Quick and dirty residuals
+    res <- residuals(m)
+    print(
+      ggplot(dd, aes(sample = res)) +
+        stat_qq() +
+        stat_qq_line() +
+        labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+        theme(aspect.ratio = 1)
+      )
+    
+    ggsave(paste0(home, "/figures/supp/qq-velocity/qq_velocity_temp_o_", i, ".pdf"),
+           width = 11, height = 11, units = "cm")
+  
+    # Predict
+    low_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.05))
+    high_mean_clim <- as.numeric(quantile(dd$mean_oxy_ct, prob = 0.95))
+    mean_log_biomass_ct <- mean(dd$mean_log_biomass_ct)
+  
+    nd <- data.frame(temp_vel_sc = c(0, 1, 0, 1),
+                     mean_oxy_ct = c(low_mean_clim, low_mean_clim, high_mean_clim, high_mean_clim),
+                     mean_log_biomass_ct = rep(mean_log_biomass_ct, 4))
+    
+    nsim <- 500
+    
+    pred <- predict(m, newdata = nd, nsim = nsim, re_form = NA)
+    
+    pred <- data.frame(
+      mean_oxy_ct = rep(c(low_mean_clim, high_mean_clim), each = nsim),
+      est_0 = c(pred[1, ], pred[3, ]),
+      est_change = c(pred[2, ], pred[4, ])) # change is increase in temp
+    
+    pred <- pred |> 
+      mutate(delta_bio_vel = est_change - est_0, # if delta_bio_vel is positive, biomass goes up with 1 increase in temp
+             mean_clim = ifelse(mean_oxy_ct == low_mean_clim, 
+                                "low_oxygen", "high_oxygen"),
+             group = i)
+    
+    pred_velo_temp_o[[i]] <- pred
+
+}
+
+pred_velo_temp_o <- dplyr::bind_rows(pred_velo_temp_o) |> 
+  separate(group, c("species", "life_stage"),
+           sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+
+write_csv(pred_velo_temp_o, paste0(home, "/output/pred_temp_o_velo_delta.csv"))
+```
+
+```{r}
+knitr::knit_exit()
+```

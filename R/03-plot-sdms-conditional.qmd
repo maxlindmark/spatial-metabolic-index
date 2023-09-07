@@ -1,0 +1,413 @@
+---
+title: "Plot conditional effects and grid predictions from 02"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+Plot conditional effects from predictions in script "02-fit-sdms-conditional.qmd"
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "patchwork",
+          "viridis", "RColorBrewer", "here", "ggnewscale", "ggh4x") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+pal_temp <- brewer.pal(n = 10, name = "Paired")[c(2, 6)]
+pal_oxy <- brewer.pal(n = 10, name = "Paired")[c(8, 4)]
+
+# Set path
+home <- here::here()
+```
+
+## Read predictions
+
+```{r}
+preds <- read_csv(paste0(home, "/output/data_conditional_02_sdms.csv")) |> 
+  filter(oxy > 3 & oxy < 9) |>
+  filter(temp > 2 & temp < 14) |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage)) |> 
+  group_by(group) |> 
+  mutate(est_sc = exp(est)/max(exp(est))) # for plotting all together in heatmap
+
+grid_preds <- read_csv(paste0(home, "/output/data_pred_grids_02_sdms.csv")) |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage))
+```
+
+## Calculate weighted quantiles
+
+```{r}
+wq <- grid_preds |> 
+  group_by(group, quarter) |>
+  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.5),
+            "1st_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.25),
+            "3rd_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.75),
+            "Env_oxy" = median(oxy),
+            
+            "Median_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.5),
+            "1st_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.25),
+            "3rd_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.75),
+            "Env_temp" = median(temp)) |> 
+  ungroup() |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage)) 
+
+wq_annual <- grid_preds |> 
+  group_by(group, year, quarter) |>
+  # Could use reframe here... 
+  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.5),
+            "1st_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.25),
+            "3rd_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.75),
+            "Env_oxy" = median(oxy),
+            
+            "Median_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.5),
+            "1st_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.25),
+            "3rd_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.75),
+            "Env_temp" = median(temp)) |> 
+  ungroup() |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage)) 
+```
+
+## Plot conditional effects
+
+```{r}
+# Heatmap
+preds |> 
+  ggplot(aes(temp, oxy, fill = est_sc)) + 
+  facet_grid(life_stage ~ species) + 
+  geom_raster(alpha = 0.9) +  
+  scale_fill_viridis() +
+  labs(x = "Temperature (°C)", y = "Oxygen (ml/L)",
+       fill = "Scaled biomass density (kg/km<sup>2</sup>)") +
+  guides(fill = guide_colorbar(title.position = "top", title.hjust = 0.5)) + 
+  scale_x_continuous(breaks = c(seq(3, 14, by = 2))) + # to avoid overplotting axis number
+  theme(legend.position = "bottom",
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(2, "line"),
+        legend.title = ggtext::element_markdown(),
+        aspect.ratio = 1)
+   
+ggsave(paste0(home, "/figures/supp/heat_conditional.pdf"), width = 17, height = 14, units = "cm")
+
+# Oxygen
+preds_oxy <- preds |> 
+  filter(temp %in% c(sort(unique(preds$temp))[0.25*length(unique(preds$temp))],  # filter the 25% and 75% percentile
+                     sort(unique(preds$temp))[0.75*length(unique(preds$temp))])) 
+
+p1 <- ggplot() + 
+  #facet_grid(life_stage ~ species) + 
+  ggh4x::facet_grid2(life_stage ~ species, scales = "free", independent = "y") +
+  geom_rect(data = wq |> filter(quarter == 1),
+            aes(xmin = `1st_oxy`, xmax = `3rd_oxy`, ymin = -Inf, ymax = Inf, fill = ""),
+            inherit.aes = FALSE, alpha = 0.1) +
+  geom_vline(data = wq |> filter(quarter == 1), aes(xintercept = Median_oxy, linetype = ""),
+             alpha = 0.5, color = "grey40") +
+  scale_fill_manual(values = "grey40") +
+  scale_color_manual(values = "grey40") + 
+  guides(fill = "none") +
+  scale_linetype_manual(values = 2) + 
+  new_scale_fill() +
+  new_scale_color() +
+  geom_line(data = preds_oxy, aes(oxy, exp(est), color = as.factor(round(temp)))) + 
+  # NOTE: 85% Confidence interval
+  geom_ribbon(data = preds_oxy,
+              aes(oxy, exp(est), ymin = exp(est - est_se*1.282), ymax = exp(est + est_se*1.282),
+                  fill = as.factor(round(temp))), color = NA, alpha = 0.2) + 
+  scale_color_manual(values = pal_temp) +
+  scale_fill_manual(values = pal_temp) +
+  labs(x = "Oxygen (ml/L)", y = "Biomass density (kg/km<sup>2</sup>)", color = "Temperature (°C)",
+       fill = "Temperature (°C)", linetype = "Biomass-weighted temperature, interquartile range") +  
+  
+  theme(legend.position = "bottom",
+        legend.spacing.y = unit(0.1, 'cm'),
+        legend.key = element_rect(fill = "grey95", inherit.blank = TRUE),
+        axis.title.y = ggtext::element_markdown(),
+        aspect.ratio = 5/6) +
+  NULL
+p1
+# ggsave(paste0(home, "/figures/oxy_conditional.pdf"), width = 17, height = 11, units = "cm")
+
+# Temperature
+preds_temp <- preds |> 
+  filter(oxy %in% c(sort(unique(preds$oxy))[0.25*length(unique(preds$oxy))],   # filter the 25% and 75% percentile
+                    sort(unique(preds$oxy))[0.75*length(unique(preds$oxy))]))
+
+p2 <- ggplot() + 
+  #facet_grid(life_stage ~ species) + 
+  ggh4x::facet_grid2(life_stage ~ species, scales = "free", independent = "y") +
+  geom_rect(data = wq |> filter(quarter == 1),
+            aes(xmin = `1st_temp`, xmax = `3rd_temp`, ymin = -Inf, ymax = Inf, fill = ""),
+            inherit.aes = FALSE, alpha = 0.1) +
+  geom_vline(data = wq |> filter(quarter == 1), aes(xintercept = Median_temp, linetype = ""),
+             alpha = 0.5, color = "grey40") +
+  scale_fill_manual(values = "grey40") +
+  scale_color_manual(values = "grey40") + 
+  guides(fill = "none") +
+  scale_linetype_manual(values = 2) + 
+  new_scale_fill() +
+  new_scale_color() +
+  geom_line(data = preds_temp, aes(temp, exp(est), color = as.factor(round(oxy)))) +
+  # NOTE: 85% Confidence interval
+  geom_ribbon(data = preds_temp,
+              aes(temp, exp(est), ymin = exp(est - est_se*1.282), ymax = exp(est + est_se*1.282),
+                  fill = as.factor(round(oxy))), color = NA, alpha = 0.2) + 
+  scale_color_manual(values = pal_oxy) + 
+  scale_fill_manual(values = pal_oxy) +
+  labs(x = "Temperature (°C)", y = "Biomass density (kg/km<sup>2</sup>)", color = "Oxygen (ml/L)",
+       fill = "Oxygen (ml/L)", linetype = "Biomass-weighted temperature, interquartile range") +  
+  
+  theme(legend.position = "bottom",
+        legend.spacing.y = unit(0.1, 'cm'),
+        legend.key = element_rect(fill = "grey95", inherit.blank = TRUE),
+        axis.title.y = ggtext::element_markdown(),
+        aspect.ratio = 5/6) +
+  NULL
+
+# ggsave(paste0(home, "/figures/temp_conditional.pdf"), width = 17, height = 11, units = "cm")
+
+(p1 / p2) + plot_annotation(tag_levels = "A")
+
+ggsave(paste0(home, "/figures/oxy_temp_conditional.pdf"), width = 17, height = 23, units = "cm")
+```
+
+## Plot weighted quantiles over time
+
+```{r}
+t <- wq_annual |> 
+  pivot_longer(c("Median_oxy", `1st_oxy`, `3rd_oxy`, "Env_oxy", "Median_temp", `1st_temp`, `3rd_temp`, "Env_temp")) |> 
+  mutate(var = ifelse(grepl("oxy", name), "Oxygen", "Temperature"),
+         type = ifelse(grepl("Env", name), "Environment", "Biomass-weighted")) |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage),
+         group2 = paste(species, life_stage, sep = " ")) |> 
+  filter(name %in% c("Median_oxy", "Median_temp", "Env_oxy", "Env_temp"))
+  
+t_env <- t |>
+  filter(type == "Environment" & group == "cod_adult") |> 
+  mutate(group2 = "Environment")
+
+t2 <- bind_rows(t_env, t |> filter(!type == "Environment"))
+
+# Reorder to have Environment at the end
+t2$group2 <- factor(t2$group2, levels = rev(unique(t2$group2)))
+
+pal <- brewer.pal(name = "Dark2", n = 8)[3:8]
+
+ggplot(t2, aes(year, value, color = group2, linetype = group2)) +
+  geom_line(alpha = 0.8) +
+  #facet_grid(quarter ~ var) +
+  ggh4x::facet_grid2(var ~ quarter, scales = "free") +
+  labs(y = "Environmental variable", x = "Year", linetype = "", color = "") +
+  guides(color = guide_legend(nrow = 3, override.aes = list(linetype = c(rep(1, 6), 2), size = 0.5)), linetype = "none") +
+  scale_x_continuous(breaks = c(seq(1993, 2021, by = 5))) +
+  scale_linetype_manual(values = c(rep(1, 6), 2)) +
+  scale_color_manual(values = c(rev(pal), "grey40")) +
+  theme(legend.position = c(0.24, 0.39),
+        legend.spacing.y = unit(-2, 'cm'),
+        legend.spacing.x = unit(0, 'cm'),
+        legend.background = element_rect(fill = NA))
+
+ggsave(paste0(home, "/figures/wm_temp_oxy.pdf"), width = 17, height = 17, units = "cm")
+```
+
+## Correlation and slope plot
+
+```{r}
+#  Correlation plot
+dcor <- t |> filter(!type == "Environment") |>
+  mutate(id = paste(name, year, quarter, sep = "_")) |>
+  dplyr::select(group2, year, var, value, quarter, id)
+
+t_env2 <- t_env |>
+  mutate(name = ifelse(name == "Env_oxy", "Median_oxy", "Median_temp")) |>
+ mutate(id = paste(name, year, quarter, sep = "_")) |>
+  rename(env_value = value) |> 
+  dplyr::select(id, env_value)
+
+dcor2 <- dcor |> left_join(t_env2, by = "id")
+ 
+cors <- plyr::ddply(dcor2, c("group2", "var", "quarter"), summarise, cor = round(cor(env_value, value), 2)) |> arrange(var)
+
+hist(cors$cor)
+
+# Plot correlations between environment and weighted
+cor_pal <- brewer.pal(n = 8, name = "Dark2")[6:7]
+  
+dcor2 |> 
+  mutate(quarter2 = ifelse(quarter == 1, "Quarter 1", "Quarter 4")) |> 
+  ggplot(aes(env_value, value, color = quarter2)) +
+  ggh4x::facet_grid2(var ~ group2, scales = "free") +
+  geom_abline(color = "grey30", linetype = 2, linewidth = 0.5) +
+  geom_point(alpha = 0.7, size = 0.5) +
+  geom_text(data = cors |> filter(quarter == 1), aes(label = paste("r=", cor, sep = "")), x = -Inf, y = Inf, hjust = -0.1, vjust = 1.5,
+            inherit.aes = FALSE, fontface = "italic", color = cor_pal[2], size = 2.5) +
+  geom_text(data = cors |> filter(quarter == 4), aes(label = paste("r=", cor, sep = "")), x = -Inf, y = Inf, hjust = -0.1, vjust = 2.7,
+            inherit.aes = FALSE, fontface = "italic", color = cor_pal[1], size = 2.5) +
+  labs(y = "Biomass-weighted", x = "Environment", color = "") +
+  stat_smooth(method = "lm", se = FALSE, size = 0.5) +
+  scale_color_manual(values = cor_pal) +
+  scale_x_continuous(breaks = c(4:8)) +
+  theme(aspect.ratio = 1,
+        legend.key.size = unit(0.2, 'cm'),
+        legend.text = element_text(size = 6),
+        legend.position = c(0.11, 0.32),
+        legend.spacing.y = unit(-3, 'cm'))
+
+ggsave(paste0(home, "/figures/supp/wm_cors.pdf"), width = 18, height = 11, units = "cm")
+
+# Plot the slopes over time for group and quarter, compare to the environment slope. Boxplots and lines??
+s_slopes <- t |> filter(!type == "Environment") |>
+  mutate(id = paste(group, var, quarter, sep = "_")) |> 
+  ungroup() |> 
+  dplyr::select(year, id, value)
+
+t_slopes <- t_env |>
+  mutate(id = paste("Environment", group2, var, quarter, sep = "_")) |> 
+  dplyr::select(year, id, value)
+
+slopes <- bind_rows(s_slopes, t_slopes)
+
+# Calculate slopes over time
+slopes2 <- slopes %>%
+  split(.$id) %>%
+  purrr::map(~lm(value ~ year, data = .x)) |>
+  purrr::map_df(broom::tidy, .id = 'Year') |>
+  filter(term == "year") |> 
+  mutate(upr = estimate + 1.96*std.error,
+         lwr = estimate - 1.96*std.error,
+         sig = ifelse(estimate > lwr & estimate < upr, "sig.", "not sig.")) |> 
+  rename(id = Year, 
+         year_slope = estimate) |> 
+  dplyr::select(id, year_slope, sig, lwr, upr) |> 
+  separate(id, into = c("species", "life_stage", "variable", "quarter"), remove = FALSE) |> 
+  #mutate(group3 = paste(str_to_title(species), str_to_title(life_stage), paste0("Q", quarter)))
+  mutate(group3 = paste(str_to_title(species), str_to_title(life_stage)),
+         x = "x") |> 
+  mutate(quarter2 = ifelse(quarter == 1, "Quarter 1", "Quarter 4"))
+  
+hlines <- slopes2 |> 
+  filter(species == "Environment")
+
+pal <- brewer.pal(name = "Dark2", n = 8)[3:8]
+
+slopes2 |> 
+  filter(!species == "Environment") |> 
+  ggplot(aes(x, year_slope, ymin = lwr, ymax = upr, color = group3)) + 
+  geom_rect(data = hlines, aes(xmin = -Inf, xmax = Inf, ymin = lwr, ymax = upr, fill = "Env. slope 95% CI"),
+            inherit.aes = FALSE, alpha = 0.1) +
+  geom_hline(data = hlines, aes(yintercept = year_slope, linetype = "Env. slope"), alpha = 0.7) +
+  geom_point(size = 2.5, position = position_dodge(width = 0.4)) + 
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0) +
+  ggh4x::facet_grid2(variable ~ quarter2, scales = "free") +
+  scale_fill_manual(values = "grey10") +
+  scale_linetype_manual(values = 2) +
+  scale_color_manual(values = pal) +
+  labs(color = "", y = "Year-slope", linetype = "", fill = "") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(), 
+        legend.position = "bottom") +
+  NULL
+
+ggsave(paste0(home, "/figures/year_slopes.pdf"), width = 17, height = 17, units = "cm")
+```
+
+## Plot spatially-varying quarter effects, spatial predictions, and ST random fields
+
+```{r}
+grid_preds <- grid_preds |> 
+  mutate(group2 = paste(species, life_stage, sep = " ")) 
+  
+names(grid_preds)
+
+# Plot spatially-varying effect
+sv <- grid_preds |> 
+  #filter(group == pull(grid_preds, group)[1]) |> 
+  filter(year == 1999) |> 
+  pivot_longer(c("zeta_s_quarter_f1", "zeta_s_quarter_f4"),
+               names_to = "field", values_to = "zeta") |> 
+  mutate(Quarter = ifelse(field == "zeta_s_quarter_f1", "Quarter 1", "Quarter 4"))
+
+plot_map_fc +
+  geom_raster(data = sv, aes(X*1000, Y*1000, fill = zeta)) + 
+  facet_grid(Quarter ~ group2) +
+  scale_fill_gradient2(name = "Zeta")
+
+ggsave(paste0(home, "/figures/supp/sv_effects.pdf"), width = 19, height = 9, units = "cm")
+
+
+for(i in unique(grid_preds$group2)){
+  
+  dd <- grid_preds |> filter(group2 == i)
+  j <- pull(dd, group)[1]
+  
+  # Quarter 1
+  print(
+    plot_map_fc +
+      geom_raster(data = filter(dd, quarter == 1), aes(X*1000, Y*1000, fill = exp(est))) +
+      facet_wrap(~year) + 
+      scale_fill_viridis(trans = "sqrt", name = "Biomass density (kg/km)",
+                         # trim extreme high values to make spatial variation more visible
+                         na.value = "yellow", limits = c(0, exp(quantile(filter(dd, quarter == 4)$est, 0.999)))) +
+      labs(caption = paste("maximum estimated biomass density =", round(max(exp(filter(dd, quarter == 4)$est)))),
+           title = i, subtitle = "Quarter 1")
+    )
+    
+    ggsave(paste0(home, paste0("/figures/supp/spatial_biomass", "_q1_", j, ".pdf")), width = 17, height = 17, units = "cm")
+    
+    
+  # Quarter 4
+  print(
+    plot_map_fc +
+      geom_raster(data = filter(dd, quarter == 4), aes(X*1000, Y*1000, fill = exp(est))) +
+      facet_wrap(~year) + 
+      scale_fill_viridis(trans = "sqrt", name = "Biomass density (kg/km)",
+                         # trim extreme high values to make spatial variation more visible
+                         na.value = "yellow", limits = c(0, exp(quantile(filter(dd, quarter == 4)$est, 0.999)))) +
+      labs(caption = paste("maximum estimated biomass density =", round(max(exp(filter(dd, quarter == 4)$est)))),
+           title = i, subtitle = "Quarter 4")
+    )
+    
+    ggsave(paste0(home, paste0("/figures/supp/spatial_biomass", "_q4_", j, ".pdf")), width = 17, height = 17, units = "cm")
+  
+}
+```

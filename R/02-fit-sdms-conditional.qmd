@@ -1,0 +1,211 @@
+---
+title: "Fit tweedie/delta models to biomass density"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools",
+          "viridis", "RColorBrewer", "here", "sdmTMBextra") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(sdmTMB)
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Read data
+
+```{r read data}
+# Read data
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+  rename(X = x, Y = y) |> 
+  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
+                 flounder_juvenile, plaice_adult, plaice_juvenile),
+               names_to = "group", values_to = "density") |> 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+  drop_na(depth, temp, oxy, sal, density)
+
+# Drop dab!
+# d |>
+#   filter(group == "dab_juvenile" & quarter == 1) |>
+#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+#   ggplot(aes(X, Y, color = pres)) +
+#   geom_point(size = 0.3) +
+#   coord_fixed() +
+#   facet_wrap(~year)
+# 
+# d |>
+#   filter(group == "dab_juvenile" & quarter == 4) |>
+#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+#   ggplot(aes(X, Y, color = pres)) +
+#   geom_point(size = 0.3) +
+#   coord_fixed() +
+#   facet_wrap(~year)
+
+d <- d |> filter(!species == "dab")
+```
+
+## Scale variables
+
+```{r}
+d <- d |> 
+  group_by(group) |> 
+  mutate(temp_sc = scale(temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = scale(oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = scale(sal),
+         depth_sc = scale(depth),
+         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+  mutate(quarter_f = as.factor(quarter),
+         year_f = as.factor(year)) |> 
+  ungroup()
+```
+
+## Read and scale the prediction grid
+
+```{r}
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
+
+# Scale variables with respect to data, not the prediction grid!
+pred_grid <- pred_grid |> 
+  drop_na(depth, temp, oxy, sal) |> 
+  mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = (sal - mean(d$sal)) / sd(d$sal),
+         depth_sc = (depth - mean(d$depth)) / sd(d$depth),
+         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+  mutate(quarter_f = as.factor(quarter),
+         year_f = as.factor(year)) |> 
+  ungroup()
+```
+
+## Fit the model that is preferred by most (m3, i.e., temp + temp_sq + bp_oxyg) 
+Plot residuals, save model object, plot conditional effects!
+
+```{r}
+pred_list <- list()
+pred_grid_list <- list()
+
+for(i in unique(d$group)) { 
+    
+    dd <- d |> filter(group == i)
+
+    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+
+    # this is m3 (bp oxy)
+    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
+                 data = dd,
+                 mesh = mesh,
+                 #family = delta_gamma(link1 = "logit", link2 = "log"),
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "IID",
+                 spatial = "off",
+                 spatial_varying = ~0 + quarter_f,
+                 time = "year")
+        
+    # Check again to be safe...
+    sanity(m3)
+
+    # Plot residuals
+    samps <- sdmTMBextra::predict_mle_mcmc(m3, mcmc_iter = 201, mcmc_warmup = 200)
+    mcmc_res <- residuals(m3, type = "mle-mcmc", mcmc_samples = samps)
+
+    p1 <- ggplot(dd, aes(sample = mcmc_res)) +
+      stat_qq() +
+      stat_qq_line() +
+      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+      theme(aspect.ratio = 1)
+
+    print(p1)
+
+    ggsave(paste0(home, "/figures/supp/qq-sdm-02/qq_", i, ".pdf"),
+           width = 17, height = 11, units = "cm")
+
+    # Save model object
+    saveRDS(m3, paste0(home, "/output/models/sdm_02_m3_", i, ".rds"))
+     
+    # Create prediction dfs for conditional effects
+    nd <- data.frame(expand.grid(temp = seq(min(dd$temp),
+                                            max(dd$temp),
+                                            length.out = 50),
+                                 oxy = seq(min(dd$oxy),
+                                           max(dd$oxy),
+                                           length.out = 50),
+                                 quarter = c(1, 4))) |>
+      mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
+             temp_sq = temp_sc^2,
+             oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy)) |> # should be in relation to data I believe (not dd)
+      mutate(year = 1999, year_f = as.factor(1999), quarter_f = as.factor(quarter), sal_sc = 0, # and the rest...
+             depth_sc = 0, depth_sq = 0,
+             group = i)
+
+    # Predict
+    pred <- predict(m3, newdata = nd, re_form = NA, se_fit = TRUE)
+    # TODO: why do I need both quarters to predict?
+
+    # Save
+    pred_list[[i]] <- pred |> filter(quarter == 1)
+
+    # Predict on grid 
+    p <- predict(m3, newdata = pred_grid) |> mutate(group = i)
+    
+    # Save
+    pred_grid_list[[i]] <- p 
+    
+}
+
+# Save predictions and sims as data frames
+preds <- dplyr::bind_rows(pred_list)
+preds_grid <- dplyr::bind_rows(pred_grid_list)
+```
+
+# Save
+
+```{r}
+write_csv(preds, paste0(home, "/output/data_conditional_02_sdms.csv"))
+write_csv(preds_grid, paste0(home, "/output/data_pred_grids_02_sdms.csv"))
+```

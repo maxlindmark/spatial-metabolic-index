@@ -1,0 +1,228 @@
+---
+title: "Fit tweedie/delta models to biomass density"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+Fit climate-agnostic sdms for calculating biomass trends and velocities
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools",
+          "viridis", "RColorBrewer", "here", "sdmTMBextra") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(sdmTMB)
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Read data
+
+```{r read data}
+# Read data
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+  rename(X = x, Y = y) |> 
+  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
+                 flounder_juvenile, plaice_adult, plaice_juvenile),
+               names_to = "group", values_to = "density") |> 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+  drop_na(depth, temp, oxy, sal, density)
+
+# Drop dab!
+# d |>
+#   filter(group == "dab_juvenile" & quarter == 1) |>
+#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+#   ggplot(aes(X, Y, color = pres)) +
+#   geom_point(size = 0.3) +
+#   coord_fixed() +
+#   facet_wrap(~year)
+# 
+# d |>
+#   filter(group == "dab_juvenile" & quarter == 4) |>
+#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+#   ggplot(aes(X, Y, color = pres)) +
+#   geom_point(size = 0.3) +
+#   coord_fixed() +
+#   facet_wrap(~year)
+
+d <- d |> filter(!species == "dab")
+```
+
+## Scale variables
+
+```{r}
+d <- d |> 
+  group_by(group) |> 
+  mutate(temp_sc = scale(temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = scale(oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = scale(sal),
+         depth_sc = scale(depth),
+         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+  mutate(quarter_f = as.factor(quarter),
+         year_f = as.factor(year)) |> 
+  ungroup()
+```
+
+## Read and scale the prediction grid
+
+```{r}
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
+
+# Scale variables with respect to data, not the prediction grid!
+pred_grid <- pred_grid |> 
+  drop_na(depth, temp, oxy, sal) |> 
+  mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = (sal - mean(d$sal)) / sd(d$sal),
+         depth_sc = (depth - mean(d$depth)) / sd(d$depth),
+         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+  mutate(quarter_f = as.factor(quarter),
+         year_f = as.factor(year)) |> 
+  ungroup()
+
+# We will join the MI with the prediction grid in the for loop. Before doing that, prepare it by calculating some extra variables
+
+# Oxygen is ml/L, We want micro mol/L. 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
+pred_grid$oxy_si <- (pred_grid$oxy * (10^3)) / 22.391
+
+# Line 123 in https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
+# Define the constants
+kb <- 0.000086173324 # Boltzmann's constant
+t_ref <- 15 # arbitrary reference temperature
+```
+
+## Calculate the metabolic index
+
+```{r}
+# Read metabolic parameter estimates and left_join
+mi_pars <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") |> 
+  readr::read_csv(paste0(home, "/data/clean/mi_params.csv")) |>
+  dplyr::select(-temp) |> 
+  dplyr::select(-po2, -A0_po2, -E_po2, -n_po2) # these pressure-based parameters are not needed
+
+# For now we'll use plaice parameters for flounder, see "00_estimate_mi_params.Rmd"
+mi_pars2 <- mi_pars
+mi_pars2[4, c(4:5)] <- mi_pars2[1, c(4:5)]
+
+# Read representative size csv to calculate the metabolic index
+sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") |> 
+  mutate(group = paste(species, name, sep = "_")) |> 
+  dplyr::select(group, B) |> 
+  separate(group, into = c("species", "life_stage"), sep = "_", remove = FALSE)
+
+# Join the species-based MI pars with the species + life_stage-based size data
+# This dataframe can be joined with the prediction data-frame in the for loop below
+mi <- sizes |>
+  left_join(mi_pars2, by = "species")
+```
+
+## Fit the model that is preferred by most (m3, i.e., temp + temp_sq + bp_oxyg) 
+Plot residuals, save model object, plot conditional effects!
+
+```{r}
+pred_grid_list <- list()
+
+for(i in unique(d$group)) { 
+    
+    dd <- d |> filter(group == i)
+
+    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+
+    # this is a variant of without fixed effects
+    m <- sdmTMB(density ~ 0 + year_f + quarter_f + depth_sc + depth_sq,
+                data = dd,
+                mesh = mesh,
+                family = tweedie(link = "log"),
+                spatiotemporal = "IID",
+                # TODO: residuals look terrible without ST fields...
+                spatial = "off",
+                spatial_varying = ~0 + quarter_f,
+                time = "year")
+        
+    # Check again to be safe...
+    sanity(m)
+
+    # Plot residuals
+    samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
+    mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+
+    p1 <- ggplot(dd, aes(sample = mcmc_res)) +
+      stat_qq() +
+      stat_qq_line() +
+      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+      theme(aspect.ratio = 1)
+
+    print(p1)
+
+    ggsave(paste0(home, "/figures/supp/qq-sdm-04/qq_", i, ".pdf"),
+           width = 11, height = 11, units = "cm")
+
+    # Save model object
+    saveRDS(m, paste0(home, "/output/models/sdm_04_random_", i, ".rds"))
+    
+    # Predict on grid 
+    p <- predict(m, newdata = pred_grid) |>
+      mutate(group = i)
+    
+    # Calculate concentration-based metabolic index
+    p <- p |>
+      left_join(mi, by = "group") |> 
+      mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
+             phi = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp))
+
+    # Save
+    pred_grid_list[[i]] <- p
+    
+}
+
+# Save predictions and sims as data frames
+preds_grid <- dplyr::bind_rows(pred_grid_list) |> as.data.frame()
+```
+
+# Save
+
+```{r}
+write_csv(preds_grid, paste0(home, "/output/data_pred_grids_04_random_sdms.csv"))
+```

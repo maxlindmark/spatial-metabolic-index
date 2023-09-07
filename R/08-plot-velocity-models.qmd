@@ -1,0 +1,284 @@
+---
+title: "Plot velocity models"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+This scripts plots predictions from models fitted "07-fit-velocity-models.qmd", where biomass velocity is fitted as a function of climate velocities
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "rMR", "ggridges",
+          "kableExtra", "viridis", "RColorBrewer", "here", "sdmTMBextra", "patchwork") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Packages not on CRAN or dev version
+# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(sdmTMB)
+
+# Source code for map plots
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+
+pal_temp <- brewer.pal(n = 10, name = "Paired")[c(2, 6)]
+pal_phi <- brewer.pal(n = 10, name = "Paired")[c(10, 12)]
+pal_oxy <- brewer.pal(n = 10, name = "Paired")[c(8, 4)]
+```
+
+## Read and plot data
+
+```{r}
+# trend_phi <- read_csv(paste0(home, "/output/pred_phi_trend_delta.csv")) |> rename(delta_bio_trend = bio_trend_delta)
+# trend_temp <- read_csv(paste0(home, "/output/pred_temp_trend_delta.csv"))
+# trend_oxy <- read_csv(paste0(home, "/output/pred_oxy_trend_delta.csv"))
+```
+
+## Plot phi velocity models
+
+```{r}
+velo_phi <- read_csv(paste0(home, "/output/pred_phi_velo_delta.csv"))
+
+velo_phi <- velo_phi |>
+  mutate(mean_clim = ifelse(mean_clim == "high_phi", "High \u03C6", "Low \u03C6")) |>
+  mutate(id = paste(species, life_stage))
+  
+order <- velo_phi |>
+  group_by(id, mean_clim) |> 
+  summarise(mean_delta = mean(delta_bio_vel)) |> 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+  mutate(diff = `Low φ` - `High φ`) |> 
+  arrange(desc(diff)) |> 
+  mutate(Expected = ifelse(`Low φ` < `High φ` & `High φ` <= 0, "Yes", "No")) # TODO: what is expected? that a decline in phi equals to decline in biomass, but more so if already bad?
+
+velo_phi <- velo_phi |> 
+  left_join(order |> dplyr::select(Expected), by = "id")
+
+velo_phi$id <- factor(velo_phi$id, levels = c(order$id))
+                                 
+p1 <- velo_phi |>
+  ggplot(aes(delta_bio_vel, id, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30", linewidth = 0.5) + 
+  geom_density_ridges(color = NA, rel_min_height = 0.001) +
+  scale_fill_manual(values = pal_phi) +
+  scale_alpha_manual(values = c(0.4, 0.6)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\ndecline in \u03C6 velocity", fill = "Mean climate") +
+  theme(legend.position = c(0.88, 0.14), 
+        legend.key.size = unit(0.15, "cm"),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6),
+        legend.spacing.y = unit(0, "cm")) +
+  NULL
+
+p1
+#ggsave("figures/mi_velo_delta.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+## Plot temperature velocity models
+
+```{r}
+velo_temp <- read_csv(paste0(home, "/output/pred_temp_velo_delta.csv"))
+
+velo_temp <- velo_temp |>
+  mutate(mean_clim = ifelse(mean_clim == "low_temperature", "Cold", "Warm")) |>
+  mutate(id = paste(species, life_stage))
+  
+order <- velo_temp |>
+  group_by(id, mean_clim) |> 
+  summarise(mean_delta = mean(delta_bio_vel)) |> 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+  mutate(diff = `Warm` - `Cold`) |> 
+  arrange(desc(diff)) |> 
+  mutate(Expected = ifelse(Cold > Warm, "Yes", "No"))
+
+order
+
+velo_temp <- velo_temp |> 
+  left_join(order |> dplyr::select(Expected), by = "id")
+
+velo_temp$id <- factor(velo_temp$id, levels = c(order$id))
+                                 
+p2 <- velo_temp |>
+  ggplot(aes(delta_bio_vel, id, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+  geom_density_ridges(color = NA, rel_min_height = 0.001) +
+  scale_fill_manual(values = pal_temp) +
+  scale_alpha_manual(values = c(0.6, 0.4)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\nincrease in temperature velocity", fill = "Mean temperature") +
+  theme(legend.position = c(0.88, 0.14), 
+        legend.key.size = unit(0.15, "cm"),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6),
+        legend.spacing.y = unit(0, "cm")) +
+  NULL
+
+p2
+#ggsave("figures/temp_velo_delta.pdf", width = 15, height = 17, units = "cm", device = cairo_pdf)
+```
+
+```{r}
+# Plot together
+(p1 / p2) + plot_annotation(tag_levels = "A")
+
+ggsave(paste0(home, "/figures/delta_biomass_velocity.pdf"), width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+## Plot phi trend models
+
+```{r}
+trend_phi <- read_csv(paste0(home, "/output/pred_phi_trend_delta.csv"))
+
+trend_phi <- trend_phi |>
+  mutate(mean_clim = ifelse(mean_clim == "high_phi", "High \u03C6", "Low \u03C6")) |>
+  mutate(id = paste(species, life_stage))
+  
+order <- trend_phi |>
+  group_by(id, mean_clim) |> 
+  summarise(mean_delta = mean(delta_bio_trend)) |> 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+  mutate(diff = `Low φ` - `High φ`) |> 
+  arrange(desc(diff)) |> 
+  mutate(Expected = ifelse(`Low φ` < `High φ` & `High φ` <= 0, "Yes", "No")) # TODO: what is expected? that a decline in phi equals to decline in biomass, but more so if already bad?
+
+trend_phi <- trend_phi |> 
+  left_join(order |> dplyr::select(Expected), by = "id")
+
+trend_phi$id <- factor(trend_phi$id, levels = c(order$id))
+                                 
+p3 <- trend_phi |>
+  ggplot(aes(delta_bio_trend, id, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30", linewidth = 0.5) + 
+  geom_density_ridges(color = NA, rel_min_height = 0.001) +
+  scale_fill_manual(values = pal_phi) +
+  scale_alpha_manual(values = c(0.4, 0.6)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\ndecline in \u03C6 trend", fill = "Mean climate") +
+  theme(legend.position = c(0.88, 0.14), 
+        legend.key.size = unit(0.15, "cm"),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6),
+        legend.spacing.y = unit(0, "cm")) +
+  NULL
+
+p3
+#ggsave("figures/mi_velo_delta.pdf", width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+## Plot temperature trend models
+
+```{r}
+trend_temp <- read_csv(paste0(home, "/output/pred_temp_trend_delta.csv"))
+
+trend_temp <- trend_temp |>
+  mutate(mean_clim = ifelse(mean_clim == "low_temperature", "Cold", "Warm")) |>
+  mutate(id = paste(species, life_stage))
+  
+order <- trend_temp |>
+  group_by(id, mean_clim) |> 
+  summarise(mean_delta = mean(delta_bio_trend)) |> 
+  pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+  mutate(diff = `Warm` - `Cold`) |> 
+  arrange(desc(diff)) |> 
+  mutate(Expected = ifelse(Cold > Warm, "Yes", "No"))
+
+order
+
+trend_temp <- trend_temp |> 
+  left_join(order |> dplyr::select(Expected), by = "id")
+
+trend_temp$id <- factor(trend_temp$id, levels = c(order$id))
+                                 
+p4 <- trend_temp |>
+  ggplot(aes(delta_bio_trend, id, fill = mean_clim, alpha = Expected)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+  geom_density_ridges(color = NA, rel_min_height = 0.001) +
+  scale_fill_manual(values = pal_temp) +
+  scale_alpha_manual(values = c(0.6, 0.4)) +
+  labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\nincrease in temperature trend", fill = "Mean temperature") +
+  theme(legend.position = c(0.88, 0.14), 
+        legend.key.size = unit(0.15, "cm"),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6),
+        legend.spacing.y = unit(0, "cm")) +
+  NULL
+
+p4
+#ggsave("figures/temp_velo_delta.pdf", width = 15, height = 17, units = "cm", device = cairo_pdf)
+```
+
+```{r}
+# Plot together
+(p3 / p4) + plot_annotation(tag_levels = "A")
+
+ggsave(paste0(home, "/figures/delta_biomass_trend.pdf"), width = 17, height = 17, units = "cm", device = cairo_pdf)
+```
+
+```{r}
+knitr::knit_exit()
+```
+
+## Plot oxygen velocity models
+
+```{r}
+# velo_oxy <- read_csv(paste0(home, "/output/pred_oxy_velo_delta.csv"))
+# 
+# velo_oxy <- velo_oxy |>
+#   mutate(mean_clim = ifelse(mean_clim == "low_oxygen", "Low Oxygen", "High Oxygen")) |> # TODO: O2 not oxygen
+#   mutate(id = paste(species, life_stage))
+#   
+# order <- velo_oxy |>
+#   group_by(id, mean_clim) |> 
+#   summarise(mean_delta = mean(delta_bio_vel)) |> 
+#   pivot_wider(names_from = mean_clim, values_from = mean_delta) |> 
+#   mutate(diff = `Low Oxygen` - `High Oxygen`) |> 
+#   arrange(desc(diff)) |> 
+#   mutate(Expected = ifelse(`Low Oxygen` < `High Oxygen` & `High Oxygen` < 0, "Yes", "No"))
+# 
+# order
+# 
+# velo_oxy <- velo_oxy |> 
+#   left_join(order |> dplyr::select(Expected), by = "id")
+# 
+# velo_oxy$id <- factor(velo_oxy$id, levels = c(order$id))
+#                                  
+# velo_oxy |>
+#   ggplot(aes(delta_bio_vel, id, fill = mean_clim, alpha = Expected)) +
+#   geom_vline(xintercept = 0, linetype = 2, color = "grey30") + 
+#   geom_density_ridges(color = NA) +
+#   scale_fill_manual(values = c("steelblue2", "tomato3")) + # TODO: these colors... 
+#   scale_alpha_manual(values = c(0.4, 0.8)) +
+#   labs(y = "", x = "\u0394 biotic velocity with a 1 st.dev\ndecline in oxygen velocity", fill = "Mean oxygen") +
+#   theme(legend.direction = "vertical") +
+#   NULL
+# 
+# ggsave("figures/temp_velo_delta.pdf", width = 15, height = 17, units = "cm", device = cairo_pdf)
+```

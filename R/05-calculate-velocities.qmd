@@ -1,0 +1,480 @@
+---
+title: "Calculate climate and biomass velocities"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Intro
+
+This scripts calculates velocities of biomass and climate variables from climate-agnostic sdm-predictions ("04-fit-sdms-random.qmd")
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "patchwork",
+          "viridis", "RColorBrewer", "here", "raster", "concaveman") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Set path
+home <- here::here()
+
+# Source code for map plots
+# For some reason I can't source it directly from github...
+# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
+# devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+source(paste0(home, "/R/functions/map-plot.R"))
+options(ggplot2.continuous.colour = "viridis")
+
+# VoCC not on CRAN?
+# devtools::install_github("JorGarMol/VoCC", dependencies = FALSE, build_vignettes = FALSE)
+library(VoCC)
+```
+
+## Read data
+
+```{r}
+# Read predictions grids
+d <- read_csv(paste0(home, "/output/data_pred_grids_04_random_sdms.csv")) |>
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE)
+```
+
+## Calculate temperature velocities!
+
+```{r temperature velocities}
+# Loop through year, species and life stage, make a data frame of temperature-velocities
+d2 <- d |>
+  dplyr::select(year, temp, group, quarter, X, Y) |> 
+  mutate(group2 = paste(group, quarter, sep = "_"))
+
+velo_list <- list()
+
+for(i in unique(d2$group2)) {
+  
+  d_sub <- filter(d2, group2 == i)
+  
+  # Convert pred grid to raster stack
+  # https://gist.github.com/statnmap/a3eb564d06dee47f2d83eceac4212881
+  d_sub_rs <- d_sub |> 
+    group_split(year) |> 
+    map(~rasterFromXYZ(.x[,c("X", "Y", "temp")])) |> 
+    stack()
+
+  #plot(d_sub_rs)
+  
+  # Temporal trend
+  vt2 <- tempTrend(d_sub_rs, th = 10) # th = Integer minimum number of observations in the series needed to calculate the trend at each cell.
+  
+  # Spatial gradient
+  vg2 <- spatGrad(d_sub_rs, projected = TRUE)
+  
+  # Climate velocity
+  gv2 <- gVoCC(vt2, vg2)
+  
+  # (so that we can use ggplot)
+  points <- rasterToPoints(gv2)
+  
+  # Make the points a dataframe for ggplot
+  df <- data.frame(points) |>
+    rename(X = x, Y = y) |> 
+    mutate(group = i) |> 
+    separate(group, c("species", "life_stage", "quarter"),
+             sep = "_", remove = FALSE) |> 
+    mutate(species = str_to_title(species),
+           life_stage = str_to_title(life_stage))
+  
+  # Save!
+  velo_list[[i]] <- df
+  
+}
+
+temp_velo_df <- dplyr::bind_rows(velo_list)
+```
+
+## Calculate oxygen velocities!
+
+```{r oxygen velocities}
+# Loop through year, species and life stage, make a data frame of oxygen-velocities
+d2 <- d |>
+  dplyr::select(year, oxy, group, quarter, X, Y) |> 
+  mutate(group2 = paste(group, quarter, sep = "_"))
+
+velo_list <- list()
+
+for(i in unique(d2$group2)) {
+  
+  d_sub <- filter(d2, group2 == i)
+  
+  # Convert pred grid to raster stack
+  # https://gist.github.com/statnmap/a3eb564d06dee47f2d83eceac4212881
+  d_sub_rs <- d_sub |> 
+    group_split(year) |> 
+    map(~rasterFromXYZ(.x[,c("X", "Y", "oxy")])) |> 
+    stack()
+
+  #plot(d_sub_rs)
+  
+  # Temporal trend
+  vt2 <- tempTrend(d_sub_rs, th = 10) # th = Integer minimum number of observations in the series needed to calculate the trend at each cell.
+  
+  # Spatial gradient
+  vg2 <- spatGrad(d_sub_rs, projected = TRUE)
+  
+  # Climate velocity
+  gv2 <- gVoCC(vt2, vg2)
+  
+  # (so that we can use ggplot)
+  points <- rasterToPoints(gv2)
+  
+  # Make the points a dataframe for ggplot
+  df <- data.frame(points) |>
+    rename(X = x, Y = y) |> 
+    mutate(group = i) |> 
+    separate(group, c("species", "life_stage", "quarter"),
+             sep = "_", remove = FALSE) |> 
+    mutate(species = str_to_title(species),
+           life_stage = str_to_title(life_stage))
+  
+  # Save!
+  velo_list[[i]] <- df
+  
+}
+
+oxy_velo_df <- dplyr::bind_rows(velo_list)
+```
+
+## Calculate biotic velocities!
+
+```{r bio velocities}
+# Loop through year, quarter, species and life stage, make a data frame of biomass-velocities
+d2 <- d |>
+  dplyr::select(year, est, group, quarter, X, Y) |> 
+  mutate(group2 = paste(group, quarter, sep = "_")) |> 
+  mutate(exp_est = exp(est))
+
+velo_list <- list()
+
+for(i in unique(d2$group2)) {
+  
+  d_sub <- filter(d2, group2 == i)
+  
+  # Convert pred grid to raster stack
+  # https://gist.github.com/statnmap/a3eb564d06dee47f2d83eceac4212881
+  d_sub_rs <- d_sub |> 
+    group_split(year) |> 
+    map(~rasterFromXYZ(.x[,c("X", "Y", "exp_est")])) |>
+    stack()
+
+  #plot(d_sub_rs)
+  
+  # Temporal trend
+  vt2 <- tempTrend(d_sub_rs, th = 10) # th = Integer minimum number of observations in the series needed to calculate the trend at each cell.
+  
+  # Spatial gradient
+  vg2 <- spatGrad(d_sub_rs, projected = TRUE)
+  
+  # Climate velocity
+  gv2 <- gVoCC(vt2, vg2)
+  
+  # (so that we can use ggplot)
+  points <- rasterToPoints(gv2)
+  
+  # Make the points a dataframe for ggplot
+  df <- data.frame(points) |>
+    rename(X = x, Y = y) |> 
+    mutate(group = i) |> 
+    separate(group, c("species", "life_stage", "quarter"),
+             sep = "_", remove = FALSE) |> 
+    mutate(species = str_to_title(species),
+           life_stage = str_to_title(life_stage))
+  
+  # Save!
+  velo_list[[i]] <- df
+  
+}
+
+bio_velo_df <- dplyr::bind_rows(velo_list)
+```
+
+## Calculate phi velocities!
+
+```{r mi velocities}
+# Loop through year, species and life stage, make a data frame of phi-velocities
+d2 <- d %>%
+  dplyr::select(year, phi, group, quarter, X, Y) %>%
+  mutate(group2 = paste(group, quarter, sep = "_"))
+
+velo_list <- list()
+
+for(i in unique(d2$group2)) {
+
+  d_sub <- filter(d2, group2 == i)
+
+  # Convert pred grid to raster stack
+  # https://gist.github.com/statnmap/a3eb564d06dee47f2d83eceac4212881
+  d_sub_rs <- d_sub %>%
+    group_split(year) %>%
+    map(~rasterFromXYZ(.x[,c("X", "Y", "phi")])) %>%
+    stack()
+
+  #plot(d_sub_rs)
+
+  # Temporal trend
+  vt2 <- tempTrend(d_sub_rs, th = 10) # th = Integer minimum number of observations in the series needed to calculate the trend at each cell.
+
+  # Spatial gradient
+  vg2 <- spatGrad(d_sub_rs, projected = TRUE)
+
+  # Climate velocity
+  gv2 <- gVoCC(vt2, vg2)
+
+  # (so that we can use ggplot)
+  points <- rasterToPoints(gv2)
+
+  # Make the points a dataframe for ggplot
+  df <- data.frame(points) %>%
+    rename(X = x, Y = y) %>%
+    mutate(group = i) %>%
+    separate(group, c("species", "life_stage", "quarter"),
+             sep = "_", remove = FALSE) %>%
+    mutate(species = str_to_title(species),
+           life_stage = str_to_title(life_stage))
+
+  # Save!
+  velo_list[[i]] <- df
+
+}
+
+phi_velo_df <- dplyr::bind_rows(velo_list)
+```
+
+## Merge velocity data data frames, then add values from the prediction data frame (mean biomass density)
+
+```{r join dataframes}
+# Make velocity data frames a single one and trim by quantiles (NA and Inf also)
+bio_velo_df_sub <- bio_velo_df |>
+  group_by(group) |> 
+  # mutate(upr = quantile(voccMag, probs = 0.975),
+  #        lwr = quantile(voccMag, probs = 0.025)) |>
+  mutate(upr = quantile(voccMag, probs = 0.995),
+         lwr = quantile(voccMag, probs = 0.005)) |>
+  ungroup() |> 
+  filter(voccMag > lwr & voccMag < upr) |> 
+  mutate(id = paste(X, Y, group, sep = "_")) |>
+  dplyr::select(voccMag, id) |>
+  mutate(var = "bio_vel")
+
+temp_velo_df_sub <- temp_velo_df |>
+  group_by(group) |> # even though the oxygen layer should be the same for all, we do it by group anyway
+  # mutate(upr = quantile(voccMag, probs = 0.975),
+  #        lwr = quantile(voccMag, probs = 0.025)) |>
+  mutate(upr = quantile(voccMag, probs = 0.995),
+         lwr = quantile(voccMag, probs = 0.005)) |>
+  ungroup() |> 
+  filter(voccMag > lwr & voccMag < upr) |> 
+  mutate(id = paste(X, Y, group, sep = "_")) |>
+  dplyr::select(voccMag, id) |>
+  mutate(var = "temp_vel")
+ 
+oxy_velo_df_sub <- oxy_velo_df |> # trim quantiles
+  group_by(group) |>
+  # mutate(upr = quantile(voccMag, probs = 0.975),
+  #        lwr = quantile(voccMag, probs = 0.025)) |> 
+  mutate(upr = quantile(voccMag, probs = 0.995),
+         lwr = quantile(voccMag, probs = 0.005)) |>
+  ungroup() |> 
+  filter(voccMag > lwr & voccMag < upr) |> 
+  mutate(id = paste(X, Y, group, sep = "_")) |>
+  dplyr::select(voccMag, id) |>
+  mutate(var = "oxy_vel")
+
+phi_velo_df_sub <- phi_velo_df |> # trim quantiles
+  group_by(group) |>
+  # mutate(upr = quantile(voccMag, probs = 0.975),
+  #        lwr = quantile(voccMag, probs = 0.025)) |> 
+  mutate(upr = quantile(voccMag, probs = 0.995),
+         lwr = quantile(voccMag, probs = 0.005)) |>
+  ungroup() |> 
+  filter(voccMag > lwr & voccMag < upr) |> 
+  mutate(id = paste(X, Y, group, sep = "_")) |>
+  dplyr::select(voccMag, id) |>
+  mutate(var = "phi_vel")
+
+# Bind all velocities!
+velo_df <- bind_rows(bio_velo_df_sub, temp_velo_df_sub, oxy_velo_df_sub, phi_velo_df_sub)
+head(velo_df)
+
+velo_df |> 
+  ggplot(aes(voccMag)) +
+  geom_histogram() +
+  facet_wrap(~var, ncol = 1)
+
+# All good. 
+# Now trim the prediction grid to use only cells (by species and life stage) that cumulatively encompass 95% of biomass
+# d_test <- data.frame(y = round(rnorm(10, 10, 2))) |> 
+#   arrange(desc(y)) |>
+#   mutate(cumsum = cumsum(y),
+#          sum = sum(y),
+#          perc = cumsum / sum)
+# d_test
+# d_test |> filter(perc < 0.95)
+
+d_grid_keep <- d |>
+  mutate(group = paste(group, quarter, sep = "_")) |> 
+  group_by(X, Y, group) |> 
+  # summarise across all years, but within group and quarter
+  summarise(grid_mean = mean(est)) |> 
+  ungroup() |> 
+  group_by(group) |>
+  arrange(desc(grid_mean)) |> 
+  mutate(cumsum = cumsum(grid_mean),
+         sum = sum(grid_mean),
+         perc = cumsum / sum) |> 
+  ungroup() |> 
+  filter(perc < 0.95) |> 
+  mutate(id = paste(X, Y, group, sep = "_"))
+
+# Filter the main dataset to include these grid cells only
+pred_grid_trim <- d |> 
+  mutate(group = paste(group, quarter, sep = "_")) |> 
+  mutate(id = paste(X, Y, group, sep = "_")) |> 
+  filter(id %in% unique(d_grid_keep$id))
+
+# Filter id's that are in the velocities data frame... because that is also trimmed by velocity quantile. Not that many so I'm not sure it's needed but still
+pred_grid_trim <- pred_grid_trim |> 
+  filter(id %in% unique(velo_df$id))
+
+# ... Now that we have the final set of grid cells by species, summarize grid cell average oxygen, temperature, and biomass, then left join that with the velocity dataframe
+# Again, this is the average across years (by cell, group and quarter)
+pred_grid_sum <- pred_grid_trim |> 
+  group_by(id) |> 
+  summarise(mean_log_biomass = mean(est), 
+            mean_temp = mean(temp),
+            mean_oxy = mean(oxy),
+            mean_phi = mean(phi)) |> 
+  # Center the average across year variables
+  mutate(mean_log_biomass_ct = mean_log_biomass - mean(mean_log_biomass),
+         mean_temp_ct = mean_temp - mean(mean_temp),
+         mean_oxy_ct = mean_oxy - mean(mean_oxy),
+         mean_phi_ct = mean_phi - mean(mean_phi)) |>
+  ungroup() |> 
+  dplyr::select(id, mean_log_biomass, mean_temp, mean_oxy, mean_phi,
+                mean_log_biomass_ct, mean_temp_ct, mean_oxy_ct, mean_phi_ct)
+
+# Left join velocities into the summarized prediction grid by id after making the velocity df wide!
+velo_df_wide <- velo_df |> pivot_wider(values_from = voccMag, names_from = var)
+
+velo <- left_join(pred_grid_sum, velo_df_wide, by = "id") |> 
+  separate(id, c("X", "Y", "species", "life_stage", "quarter"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage)) |> 
+  mutate(group = paste(species, life_stage, sep = "_"))
+
+# Now the data set is wide, and because I trimmed by velocity, I do not have the same number of cells. These are now NA as can be seen here
+# ggplot(velo, aes(X, Y, fill = bio_vel)) + 
+#   facet_wrap(~ paste(species, life_stage, quarter)) +
+#   geom_raster() + 
+#   scale_fill_viridis(na.value = "pink")
+
+# Scale the velocity explanatory variables (not biotic velocity)
+velo <- velo |> 
+  ungroup() |> 
+  # Note this drops NA across all rows, e.g., bio velocity even if it's not NA just because temp velocity is NA
+  # This is because I want to plot the variables as they enter the data
+  drop_na(temp_vel, bio_vel, phi_vel) |>
+  filter(is.finite(bio_vel)) |>
+  filter(is.finite(temp_vel)) |>
+  filter(is.finite(oxy_vel)) |>
+  filter(is.finite(phi_vel)) |>
+  group_by(group) |> 
+  mutate(temp_vel_mean = mean(temp_vel),
+         temp_vel_sd = sd(temp_vel),
+         oxy_vel_mean = mean(oxy_vel),
+         oxy_vel_sd = sd(oxy_vel),
+         phi_vel_mean = mean(phi_vel),
+         phi_vel_sd = sd(phi_vel)) |> 
+  ungroup() |> 
+  mutate(temp_vel_sc = (temp_vel - temp_vel_mean)/temp_vel_sd,
+         oxy_vel_sc = (oxy_vel - oxy_vel_mean)/oxy_vel_sd,
+         phi_vel_sc = (phi_vel - phi_vel_mean)/phi_vel_sd) |> 
+  dplyr::select(-temp_vel_mean, -temp_vel_sd, -oxy_vel_mean, -oxy_vel_sd, -phi_vel_mean, -phi_vel_sd) |> 
+  mutate(X = as.numeric(X),
+         Y = as.numeric(Y))
+
+unique(is.na(velo))
+```
+
+## Plot velocities!
+
+```{r}
+#| warning: false
+# Because we trim the grids, let's add a polygon that is the overall outside border.
+border_df <- velo
+z <- concaveman(cbind(border_df$X, border_df$Y), concavity = 2)
+plot(z)
+z_poly <- sp::SpatialPolygons(list(sp::Polygons(list(sp::Polygon(z)), ID = 1)))
+domain <- as.data.frame(z_poly@polygons[[1]]@Polygons[[1]]@coords)
+colnames(domain) <- c("X", "Y")
+
+ggplot(domain, aes(x = X, y = Y)) +
+  geom_polygon(fill = NA, color = "tomato")
+
+# Plot velocities!
+long_velo <- velo |> 
+  pivot_longer(c("bio_vel", "temp_vel", "oxy_vel", "phi_vel")) |> 
+  mutate(name2 = ifelse(name == "bio_vel", "Biotic", NA),
+         name2 = ifelse(name == "temp_vel", "Temperature", name2),
+         name2 = ifelse(name == "oxy_vel", "Oxygen", name2),
+         name2 = ifelse(name == "phi_vel", "Metabolic index", name2)) |> 
+  mutate(loop_id = paste(paste0("Q", quarter), name2, sep = " "))
+
+unique(long_velo$loop_id)
+
+# Loop through the variables... Note if oxygen, the tail is negative so ... trim by a small quantile
+
+for(i in unique(long_velo$loop_id)) {
+  
+  dd <- filter(long_velo, loop_id == i)
+    
+  print(
+    plot_map_fc + 
+      geom_raster(data = dd, aes(X*1000, Y*1000, fill = value)) +
+      facet_grid(life_stage ~ species) +
+      scale_fill_viridis(option = "mako", name = paste(i, "velocity (km/decade)")) +
+      geom_polygon(data = domain, aes(X*1000, Y*1000),
+                   fill = NA, color = "red", size = 0.2)
+    )
+    
+  ggsave(paste0(home, "/figures/supp/velocity_", str_replace(i, " ", "_"), ".pdf"), width = 17, height = 13, units = "cm")
+
+}
+
+```
+
+```{r}
+# Save data
+write_csv(velo, paste0(home, "/data/clean/velocities.csv"))
+```
