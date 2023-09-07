@@ -29,6 +29,7 @@ vignettes/*.pdf
 
 # knitr and R markdown default cache directories
 *_cache/
+*_files/
 /cache/
 
 # Temporary files created by R markdown
@@ -44,16 +45,30 @@ vignettes/*.pdf
 
 # Data
 data/DATRAS_exchange
+data/from_ale/
 data/depth_geo_tif
 data/gear_standardization
 data/ICES_StatRec_mapto_ICES_Areas
 data/NEMO_Nordic_SCOBI
 data/NEMO_Nordic_SCOBI
+data/substrate_tif/
 
-data/clean/catch_by_length_q1_q4.csv
+data/clean/catch_by_length.csv
 
 # Output
 output/
 
+# Extra material
+VoCC_Tutorial.pdf
+
+# Supp figures
+figures/supp/qq_density_sdm/
+
+# Depth nc file
+data/Mean depth natural colour (with land).nc
+
 # Meetings
 meetings/
+
+# Old scripts
+OLD_*/
