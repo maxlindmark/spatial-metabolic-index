@@ -237,16 +237,20 @@ ggplot(domain, aes(x = X, y = Y)) +
 
 # Plot velocities!
 long_trends <- trends |> 
-  pivot_longer(c("biom_slope", "temp_slope", "oxy_slope", "phi_slope")) |> 
+  # Not using phi here!
+  pivot_longer(c("biom_slope", "temp_slope", "oxy_slope")) |> 
+  #pivot_longer(c("biom_slope", "temp_slope", "oxy_slope", "phi_slope")) |> 
   mutate(name2 = ifelse(name == "biom_slope", "Biotic", NA),
          name2 = ifelse(name == "temp_slope", "Temperature", name2),
-         name2 = ifelse(name == "oxy_slope", "Oxygen", name2),
-         name2 = ifelse(name == "phi_slope", "Metabolic index", name2)) |> 
+         name2 = ifelse(name == "oxy_slope", "Oxygen", name2)#,
+         #name2 = ifelse(name == "phi_slope", "Metabolic index", name2)
+         ) |> 
   mutate(loop_id = paste(paste0("Q", quarter), name2, sep = " ")) |> 
   mutate(unit = "(kg/decade)",
          unit = ifelse(name2 == "Temperature", "(°C/decade)", unit),
-         unit = ifelse(name2 == "Oxygen", "(ml/L/decade)", unit),
-         unit = ifelse(name2 == "Metabolic index", "(M.I./decade)", unit))
+         unit = ifelse(name2 == "Oxygen", "(ml/L/decade)", unit)#,
+         #unit = ifelse(name2 == "Metabolic index", "(M.I./decade)", unit)
+         )
 
 ggplot(long_trends, aes(value)) + 
   facet_wrap(~name, scales = "free") +
@@ -267,7 +271,7 @@ for(i in unique(long_trends$loop_id)) {
                    fill = NA, color = "red", size = 0.2)
     )
     
-  ggsave(paste0(home, "/figures/supp/trend_", str_replace(i, " ", "_"), ".pdf"), width = 17, height = 13, units = "cm")
+  # ggsave(paste0(home, "/figures/supp/trend_", str_replace(i, " ", "_"), ".pdf"), width = 17, height = 13, units = "cm")
 
 }
 ```

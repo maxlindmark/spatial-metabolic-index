@@ -60,14 +60,13 @@ trends <- read_csv(paste0(home, "/data/clean/trends.csv"))
 ## Plot environmental variables!
 
 ```{r}
-velo2 <- velo |> filter(group == "Plaice_Adult" & quarter == 1)
-trends2 <- trends |> filter(group == "Plaice_Adult" & quarter == 1)
+velo2 <- velo |> filter(group == "Plaice_Adult" & quarter == 4)
+trends2 <- trends |> filter(group == "Plaice_Adult" & quarter == 4)
 
-# First row!
+# First row, temperature
 p1 <- plot_map_fc + 
   geom_raster(data = velo2, aes(X*1000, Y*1000, fill = mean_temp)) +
-  scale_fill_viridis(option = "rocket", name = "Mean °C") +
-  labs(y = "", x = "") +
+  scale_fill_viridis(option = "magma", name = "Mean °C") +
   theme_sleek(base_size = 8) +
   theme(legend.position = c(0.19, 0.81),
         legend.key.height = unit(0.4, "line"),
@@ -80,9 +79,8 @@ p1 <- plot_map_fc +
   ggtitle("Mean temperature")
 
 p2 <- plot_map_fc + 
-  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = mean_oxy)) +
-  scale_fill_viridis(option = "cividis", name = "Mean O<sub>2</sub>", direction = -1) +
-  labs(y = "", x = "") +
+  geom_raster(data = trends2, aes(X*1000, Y*1000, fill = temp_slope)) +
+  scale_fill_viridis(option = "rocket", name = "°C×decade<sup>-1</sup>") +
   theme_sleek(base_size = 8) +
   theme(legend.position = c(0.19, 0.81),
         legend.key.height = unit(0.4, "line"),
@@ -93,58 +91,51 @@ p2 <- plot_map_fc +
         axis.text.y = element_blank(),
         axis.ticks.y = element_blank(),
         axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6)) + 
+  ggtitle("Temperature trends")
+
+p3 <- plot_map_fc + 
+  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = temp_vel)) +
+  scale_fill_viridis(option = "plasma", name = "km×decade<sup>-1</sup>") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6)) + 
+  geom_sf() +
+  ggtitle("Temperature velocities")
+
+
+# Second row, oxygen
+
+p4 <- plot_map_fc + 
+  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = mean_oxy)) +
+  scale_fill_viridis(option = "cividis", name = "Mean O<sub>2</sub>", direction = -1) +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.title.x = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6),
         plot.title = ggtext::element_markdown()) + 
   ggtitle("Mean O<sub>2</sub>")
 
-p3 <- plot_map_fc + 
-  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = mean_phi)) +
-  scale_fill_viridis(option = "mako", name = "Mean \u03C6") +
-  labs(y = "", x = "") +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.19, 0.81),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Mean \u03C6")
-  
-# Second row! (trends)
-p4 <- plot_map_fc + 
-  geom_raster(data = trends2, aes(X*1000, Y*1000, fill = temp_slope)) +
-  #scale_fill_viridis(option = "rocket", name = "°C trends") +
-  scale_fill_gradient2(name = "°C×decade<sup>-1</sup>") +
-  theme_sleek(base_size = 8) +
-  labs(x = "") +
-  theme(legend.position = c(0.19, 0.81),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Temperature trends")
-
 p5 <- plot_map_fc + 
   geom_raster(data = trends2, aes(X*1000, Y*1000, fill = oxy_slope)) +
-  #scale_fill_viridis(option = "cividis", name = "O<sub>2</sub> trends") +
-  scale_fill_gradient2(name = "O<sub>2</sub>×decade<sup>-1</sup>") +
-  labs(y = "", x = "") +
+  scale_fill_viridis(option = "mako", name = "O<sub>2</sub>×decade<sup>-1</sup>") +
   theme_sleek(base_size = 8) +
   theme(legend.position = c(0.19, 0.81),
         legend.key.height = unit(0.4, "line"),
         legend.key.width = unit(0.2, "line"),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
         axis.text.y = element_blank(),
         axis.ticks.y = element_blank(),
         axis.title.y = element_blank(),
@@ -153,76 +144,27 @@ p5 <- plot_map_fc +
         plot.title = ggtext::element_markdown()) + 
   ggtitle("O<sub>2</sub> trends")
 
+
 p6 <- plot_map_fc + 
-  geom_raster(data = trends, aes(X*1000, Y*1000, fill = phi_slope)) +
-  #scale_fill_viridis(option = "mako", name = "\u03C6 trends") +
-  scale_fill_gradient2(name = "\u03C6×decade<sup>-1</sup>") +
-  labs(y = "", x = "") +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.19, 0.81),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("\u03C6 trends")
-  
-
-# Third row!
-p7 <- plot_map_fc + 
-  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = temp_vel)) +
-  #scale_fill_viridis(option = "rocket", name = "°C velocities") +
-  scale_fill_gradient2(name = "km×decade<sup>-1</sup>") +
-  labs(y = "", x = "") +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.19, 0.81),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Temperature velocities")
-
-p8 <- plot_map_fc + 
   geom_raster(data = velo2, aes(X*1000, Y*1000, fill = oxy_vel)) +
-  #scale_fill_viridis(option = "cividis", name = "O<sub>2</sub> velocities") +
-  scale_fill_gradient2(name = "km×decade<sup>-1</sup>") +
+  scale_fill_viridis(option = "plasma", name = "km×decade<sup>-1</sup>") +
   theme_sleek(base_size = 8) +
-  labs(y = "") +
   theme(legend.position = c(0.19, 0.81),
         legend.key.height = unit(0.4, "line"),
         legend.key.width = unit(0.2, "line"),
         axis.text.y = element_blank(),
         axis.ticks.y = element_blank(),
         axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6),
         plot.title = ggtext::element_markdown()) + 
   ggtitle("O<sub>2</sub> velocities")
 
-p9 <- plot_map_fc + 
-  geom_raster(data = velo2, aes(X*1000, Y*1000, fill = phi_vel)) +
-  #scale_fill_viridis(option = "mako", name = "\u03C6 velocities") +
-  scale_fill_gradient2(name = "km×decade<sup>-1</sup>") +
-  labs(y = "", x = "") +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.19, 0.81),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("\u03C6 velocities")
-  
-(p1 + p2 + p3) / (p4 + p5 + p6) / (p7 + p8 + p9) + plot_annotation(tag_levels = "A")
 
-ggsave(paste0(home, "/figures/env_vars_space.pdf"), width = 17, height = 15, units = "cm", device = cairo_pdf)
+(p1 + p2 + p3) / (p4 + p5 + p6) + plot_annotation(tag_levels = "A")
+
+ggsave(paste0(home, "/figures/env_vars_space.pdf"), width = 17, height = 11, units = "cm", device = cairo_pdf)
 ```
 
 ## Now do biotic variables... add here the boundary!
@@ -239,8 +181,8 @@ colnames(domain) <- c("X", "Y")
 ggplot(domain, aes(x = X, y = Y)) +
   geom_polygon(fill = NA, color = "tomato")
 
-velo2 <- velo |> filter(quarter == 1 & life_stage == "Adult")
-trends2 <- trends |> filter(quarter == 1 & life_stage == "Adult")
+velo2 <- velo |> filter(quarter == 4 & life_stage == "Adult")
+trends2 <- trends |> filter(quarter == 4 & life_stage == "Adult")
 
 # First row!
 p1 <- plot_map_fc + 
@@ -299,7 +241,7 @@ p3 <- plot_map_fc +
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
   ggtitle("Mean plaice biomass")
-  
+
 p1 + p2 + p3
 
 # Second row! (trends)
@@ -319,7 +261,7 @@ p4 <- plot_map_fc +
         axis.title.x = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Cod biomass change")
+  ggtitle("Cod biomass trends")
 
 p5 <- plot_map_fc + 
   geom_raster(data = trends2 |> filter(species == "Flounder"), aes(X*1000, Y*1000, fill = biom_slope)) +
@@ -340,7 +282,7 @@ p5 <- plot_map_fc +
         axis.title.y = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Flounder biomass change")
+  ggtitle("Flounder biomass trends")
 
 p6 <- plot_map_fc + 
   geom_raster(data = trends2 |> filter(species == "Plaice"), aes(X*1000, Y*1000, fill = biom_slope)) +
@@ -361,8 +303,8 @@ p6 <- plot_map_fc +
         axis.title.y = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Plaice biomass change")
-  
+  ggtitle("Plaice biomass trends")
+
 
 # Third row! (velocities)
 p7 <- plot_map_fc + 
@@ -378,7 +320,7 @@ p7 <- plot_map_fc +
         legend.key.width = unit(0.2, "line"),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Cod velocity change")
+  ggtitle("Cod velocities")
 
 p8 <- plot_map_fc + 
   geom_raster(data = velo2 |> filter(species == "Flounder"), aes(X*1000, Y*1000, fill = bio_vel)) +
@@ -396,7 +338,7 @@ p8 <- plot_map_fc +
         axis.title.y = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Flounder velocity change")
+  ggtitle("Flounder velocities")
 
 p9 <- plot_map_fc + 
   geom_raster(data = velo2 |> filter(species == "Plaice"), aes(X*1000, Y*1000, fill = bio_vel)) +
@@ -414,11 +356,9 @@ p9 <- plot_map_fc +
         axis.title.y = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"),
         legend.title = ggtext::element_markdown(size = 6)) + 
-  ggtitle("Plaice velocity change")
-  
+  ggtitle("Plaice velocities")
+
 (p1 + p2 + p3) / (p4 + p5 + p6) / (p7 + p8 + p9) + plot_annotation(tag_levels = "A")
 
 ggsave(paste0(home, "/figures/bio_vars_space.pdf"), width = 17, height = 15, units = "cm", device = cairo_pdf)
 ```
-
-

@@ -90,12 +90,12 @@ d <- d |> filter(!species == "dab")
 ```{r}
 d <- d |> 
   group_by(group) |> 
-  mutate(temp_sc = scale(temp),
+  mutate(temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
-         oxy_sc = scale(oxy),
+         oxy_sc = as.vector(scale(oxy)),
          oxy_sq = oxy_sc^2,
-         sal_sc = scale(sal),
-         depth_sc = scale(depth),
+         sal_sc = as.vector(scale(sal)),
+         depth_sc = as.vector(scale(depth)),
          depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
   mutate(quarter_f = as.factor(quarter),
          year_f = as.factor(year)) |> 
@@ -163,6 +163,7 @@ Plot residuals, save model object, plot conditional effects!
 
 ```{r}
 pred_grid_list <- list()
+res_list <- list()
 
 for(i in unique(d$group)) { 
     
@@ -176,7 +177,6 @@ for(i in unique(d$group)) {
                 mesh = mesh,
                 family = tweedie(link = "log"),
                 spatiotemporal = "IID",
-                # TODO: residuals look terrible without ST fields...
                 spatial = "off",
                 spatial_varying = ~0 + quarter_f,
                 time = "year")
@@ -187,18 +187,11 @@ for(i in unique(d$group)) {
     # Plot residuals
     samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
     mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
+    dd$res <- as.vector(mcmc_res)
 
-    p1 <- ggplot(dd, aes(sample = mcmc_res)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
-      theme(aspect.ratio = 1)
-
-    print(p1)
-
-    ggsave(paste0(home, "/figures/supp/qq-sdm-04/qq_", i, ".pdf"),
-           width = 11, height = 11, units = "cm")
-
+    # Store residuals
+    res_list[[i]] <- dd
+    
     # Save model object
     saveRDS(m, paste0(home, "/output/models/sdm_04_random_", i, ".rds"))
     
@@ -219,10 +212,29 @@ for(i in unique(d$group)) {
 
 # Save predictions and sims as data frames
 preds_grid <- dplyr::bind_rows(pred_grid_list) |> as.data.frame()
+res <- dplyr::bind_rows(res_list) |> as.data.frame()
 ```
 
-# Save
+## Plot residuals
 
 ```{r}
+# Plot residuals
+res |> 
+  mutate(group2 = str_replace(group, "_", " "),
+         group2 = str_to_title(group2)) |> 
+  ggplot(aes(sample = res)) +
+  stat_qq(size = 0.75, shape = 21, fill = NA) +
+  facet_wrap(~group2) +
+  stat_qq_line() +
+  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+  theme(aspect.ratio = 1)
+
+ggsave(paste0(home, "/figures/supp/qq_sdm_04.pdf"), width = 17, height = 17, units = "cm")
+```
+
+## Save
+
+```{r}
+write_csv(res, paste0(home, "/output/residuals_04_sdms.csv"))
 write_csv(preds_grid, paste0(home, "/output/data_pred_grids_04_random_sdms.csv"))
 ```

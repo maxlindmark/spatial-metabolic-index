@@ -44,7 +44,8 @@ home <- here::here()
 
 ```{r}
 aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) |> 
-  mutate(formula = ifelse(model == "m1", "*temp+temp<sup>2</sup>+oxy*", NA),
+  mutate(formula = ifelse(model == "m0", "*temp+oxy*", NA),
+         formula = ifelse(model == "m1", "*temp+temp<sup>2</sup>+oxy*", formula),
          formula = ifelse(model == "m2", "*temp×oxy*", formula),
          formula = ifelse(model == "m3", "*temp+temp<sup>2</sup>+bp(oxy)*", formula),
          #formula = ifelse(model == "m4", "*temp+temp<sup>2</sup>+logistic(oxy)*", formula),
@@ -78,7 +79,7 @@ ggplot(aic, aes(group2, delta_aic, color = factor(formula, levels = order),
         legend.title = element_text(size = 8)) +
   NULL
 
-ggsave(paste0(home, "/figures/aic.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
+#ggsave(paste0(home, "/figures/aic.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
 
 # As table..
 aic2 <- aic |> 

@@ -444,11 +444,14 @@ ggplot(domain, aes(x = X, y = Y)) +
 
 # Plot velocities!
 long_velo <- velo |> 
-  pivot_longer(c("bio_vel", "temp_vel", "oxy_vel", "phi_vel")) |> 
+  # Not using phi for now!
+  #pivot_longer(c("bio_vel", "temp_vel", "oxy_vel", "phi_vel")) |> 
+  pivot_longer(c("bio_vel", "temp_vel", "oxy_vel")) |> 
   mutate(name2 = ifelse(name == "bio_vel", "Biotic", NA),
          name2 = ifelse(name == "temp_vel", "Temperature", name2),
-         name2 = ifelse(name == "oxy_vel", "Oxygen", name2),
-         name2 = ifelse(name == "phi_vel", "Metabolic index", name2)) |> 
+         name2 = ifelse(name == "oxy_vel", "Oxygen", name2)#,
+         #name2 = ifelse(name == "phi_vel", "Metabolic index", name2)
+         ) |> 
   mutate(loop_id = paste(paste0("Q", quarter), name2, sep = " "))
 
 unique(long_velo$loop_id)
@@ -468,7 +471,7 @@ for(i in unique(long_velo$loop_id)) {
                    fill = NA, color = "red", size = 0.2)
     )
     
-  ggsave(paste0(home, "/figures/supp/velocity_", str_replace(i, " ", "_"), ".pdf"), width = 17, height = 13, units = "cm")
+  #ggsave(paste0(home, "/figures/supp/velocity_", str_replace(i, " ", "_"), ".pdf"), width = 17, height = 13, units = "cm")
 
 }
 

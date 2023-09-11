@@ -131,13 +131,13 @@ d <- d |>
 ```{r}
 d <- d |> 
   group_by(group) |> 
-  mutate(phi_sc = scale(phi),
-         temp_sc = scale(temp),
+  mutate(phi_sc = as.vector(scale(phi)),
+         temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
-         oxy_sc = scale(oxy),
+         oxy_sc = as.vector(scale(oxy)),
          oxy_sq = oxy_sc^2,
-         sal_sc = scale(sal),
-         depth_sc = scale(depth),
+         sal_sc = as.vector(scale(sal)),
+         depth_sc = as.vector(scale(depth)),
          depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
   mutate(quarter_f = as.factor(quarter),
          year_f = as.factor(year)) |> 
@@ -165,7 +165,7 @@ ggplot(d, aes(phi_sc, log(density + 1))) +
 
 ```{r}
 # Plot mi by species and life stage
-pal <- brewer.pal(name = "Dark2", n = 8)
+pal <- brewer.pal(name = "Dark2", n = 8)[c(7, 5, 3)]
 
 d |> 
   mutate(species = str_to_title(species),
@@ -181,7 +181,7 @@ d |>
   scale_color_manual(values = rev(pal), name = "") +
   scale_fill_manual(values = rev(pal), name = "")
 
-ggsave(paste0(home, "/figures/mi_histogram.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
+ggsave(paste0(home, "/figures/supp/mi_histogram.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
 ```
 
 ## Fit models and save AIC
@@ -197,43 +197,49 @@ for(i in unique(d$group)) {
     
     mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
     
+    print(
     ggplot() +
       inlabru::gg(mesh$mesh) +
       coord_fixed() +
       geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
-      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.3, vjust = 3) + 
+      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.1, vjust = 2) + 
       labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
+    )
     
-    ggsave(paste0(home, "/figures/supp/mesh_aic_", i, ".pdf"), width = 17, height = 17, units = "cm")
-
     print(i)
+    
+    # 0. Linear oxygen and temperature, spatially varying quarter
+    m0 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + oxy_sc,
+                 data = dd,
+                 mesh = mesh,
+                 family = tweedie(link = "log"),
+                 spatiotemporal = "IID",
+                 # this setting for spatial field(s) works better for majority of groups compare to single sf
+                 spatial = "off",
+                 spatial_varying = ~0 + quarter_f, # if enabled, keep quarter_f in main formula; 
+                 time = "year")
+    print("m0")
+    sanity(m0)
+    dd$m0_res <- residuals(m0)
     
     # 1. Linear oxygen and squared temperature, spatially varying quarter
     m1 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
                  data = dd,
                  mesh = mesh,
-                 #time_varying = ~0 + depth_sc + depth_sq, # if enabled, remove from the main formula
-                 #family = delta_gamma(link1 = "logit", link2 = "log"),
                  family = tweedie(link = "log"),
-                 #spatiotemporal = "off",
                  spatiotemporal = "IID",
-                 # this setting for spatial field(s) works better for majority of groups compare to single sf
                  spatial = "off",
-                 spatial_varying = ~0 + quarter_f, # if enabled, keep quarter_f in main formula; 
+                 spatial_varying = ~0 + quarter_f,
                  time = "year")
     print("m1")
     sanity(m1)
     dd$m1_res <- residuals(m1)
     
     # 2. interaction between linear oxygen and temperature, drop quadratic
-    #m2 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc)
-    # TODO: can't use update with delta models?
-     m2 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
+    m2 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
                   data = dd,
                   mesh = mesh,
-                  #family = delta_gamma(link1 = "logit", link2 = "log"),
                   family = tweedie(link = "log"),
-                  #spatiotemporal = "off",
                   spatiotemporal = "IID",
                   spatial = "off",
                   spatial_varying = ~0 + quarter_f,
@@ -243,13 +249,10 @@ for(i in unique(d$group)) {
     dd$m2_res <- residuals(m2)
 
     # 3. breakpoint oxygen
-    #m3 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc))
     m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
                  data = dd,
                  mesh = mesh,
-                 #family = delta_gamma(link1 = "logit", link2 = "log"),
                  family = tweedie(link = "log"),
-                 #spatiotemporal = "off",
                  spatiotemporal = "IID",
                  spatial = "off",
                  spatial_varying = ~0 + quarter_f,
@@ -259,7 +262,6 @@ for(i in unique(d$group)) {
     dd$m3_res <- residuals(m3)
 
     # 4. logistic oxygen
-    # m4 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + logistic(oxy_sc))
     # m4 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + logistic(oxy_sc),
     #              data = dd,
     #              mesh = mesh,
@@ -273,13 +275,10 @@ for(i in unique(d$group)) {
     # dd$m4_res <- residuals(m4)
 
     # 5. linear metabolic index
-    #m5 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + phi_sc)
     m5 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + phi_sc,
                  data = dd,
                  mesh = mesh,
-                 #family = delta_gamma(link1 = "logit", link2 = "log"),
                  family = tweedie(link = "log"),
-                 #spatiotemporal = "off",
                  spatiotemporal = "IID",
                  spatial = "off",
                  spatial_varying = ~0 + quarter_f,
@@ -289,13 +288,10 @@ for(i in unique(d$group)) {
     dd$m5_res <- residuals(m5)
 
     # 6. breakpoint metabolic index!
-    #m6 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + breakpt(phi_sc))
     m6 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + breakpt(phi_sc),
                  data = dd,
                  mesh = mesh,
-                 #family = delta_gamma(link1 = "logit", link2 = "log"),
                  family = tweedie(link = "log"),
-                 #spatiotemporal = "off",
                  spatiotemporal = "IID",
                  spatial = "off",
                  spatial_varying = ~0 + quarter_f,
@@ -312,7 +308,8 @@ for(i in unique(d$group)) {
     
     # Plot residuals
     p1 <- dd |>
-      dplyr::select(m1_res,
+      dplyr::select(m0_res,
+                    m1_res,
                     m2_res,
                     m3_res,
                     #m4_res,
@@ -331,7 +328,8 @@ for(i in unique(d$group)) {
     print(p1)
 
     # Save AIC
-    data_list_aic[[i]] <- AIC(m1,
+    data_list_aic[[i]] <- AIC(m0, 
+                              m1,
                               m2,
                               m3,
                               #m4,
@@ -348,263 +346,105 @@ for(i in unique(d$group)) {
 data_aic <- bind_rows(data_list_aic)
 
 write_csv(data_aic, paste0(home, "/output/data_aic_01.csv"))
-
-# TODO: check why I can't use update, see if I can use logistic now that I use delta models
 ```
 
-## Plot AIC
+## Plot meshes in a single plot using patchwork
 
 ```{r}
-aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) |> 
-  mutate(formula = ifelse(model == "m1", "*temp+temp<sup>2</sup>+oxy*", NA),
-         formula = ifelse(model == "m2", "*temp×oxy*", formula),
-         formula = ifelse(model == "m3", "*temp+temp<sup>2</sup>+bp(oxy)*", formula),
-         #formula = ifelse(model == "m4", "*temp+temp<sup>2</sup>+logistic(oxy)*", formula),
-         formula = ifelse(model == "m5", "*\u03C6*", formula),
-         formula = ifelse(model == "m6", "*bp(\u03C6)*", formula)#,
-         #formula = ifelse(model == "m7", "logistic(phi)", formula)
-         ) |> 
-  group_by(group) |> 
-  mutate(delta_aic = AIC - min(AIC),
-         Favoured = ifelse(delta_aic < 2, "Y", "N")) |> 
-  ungroup() |> 
-  separate(group, into = c("species", "life_stage")) |> 
-  mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) |> 
-  mutate(group2 = paste(species, life_stage))
+g1 <- d |> filter(group == unique(d$group)[1])
+mesh_g1 <- make_mesh(g1, xy_cols = c("X", "Y"), cutoff = 15)
+
+g2 <- d |> filter(group == unique(d$group)[5])
+mesh_g2 <- make_mesh(g2, xy_cols = c("X", "Y"), cutoff = 15)
+
+g3 <- d |> filter(group == unique(d$group)[3])
+mesh_g3 <- make_mesh(g3, xy_cols = c("X", "Y"), cutoff = 15)
+
+g4 <- d |> filter(group == unique(d$group)[2])
+mesh_g4 <- make_mesh(g4, xy_cols = c("X", "Y"), cutoff = 15)
+
+g5 <- d |> filter(group == unique(d$group)[6])
+mesh_g5 <- make_mesh(g5, xy_cols = c("X", "Y"), cutoff = 15)
+
+g6 <- d |> filter(group == unique(d$group)[4])
+mesh_g6 <- make_mesh(g6, xy_cols = c("X", "Y"), cutoff = 15)
+
+
+p1 <- ggplot() +
+  inlabru::gg(mesh_g1$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g1, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g1$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g1$group[1], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.x = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
   
-order <- unique(aic$formula)
+p2 <- ggplot() +
+  inlabru::gg(mesh_g2$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g2, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g2$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g2$group[], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
 
-ggplot(aic, aes(group2, delta_aic, color = factor(formula, levels = order),
-                shape = Favoured)) +
-  geom_jitter(size = 2, alpha = 0.6, height = 0, width = 0.15) + 
-  scale_color_brewer(palette = "Set1") +
-  #scale_color_brewer(palette = "Paired") +
-  coord_flip() +
-  labs(x = "", y = "\u0394 AIC", color = "Formula", alpha = "Lowest AIC") +
-  theme(legend.text = ggtext::element_markdown(size = 7)) + 
-  guides(color = guide_legend(ncol = 2, title.hjust = 0.5),
-         shape = guide_legend(title.hjust = 0.5)) +
-  theme(legend.position = "bottom",
-        legend.direction = "vertical",
-        legend.title = element_text(size = 8)) +
-  NULL
+p3 <- ggplot() +
+  inlabru::gg(mesh_g3$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g3, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g3$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g3$group[], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
 
-ggsave(paste0(home, "/figures/aic.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
-```
+p4 <- ggplot() +
+  inlabru::gg(mesh_g4$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g4, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g4$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g4$group[], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.x = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
 
-```{r}
-knitr::knit_exit()
-```
+p5 <- ggplot() +
+  inlabru::gg(mesh_g5$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g5, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g5$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g5$group[], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
 
-```{r}
-plot(k)
-```
-
-### EXTRA EXPLORATION
-## Test if qqplots are improved with spatiotemporal... 
-
-Some questions I'm working on:
-
-- QQ plots are improved greatly when I use ST random fields (for delta model).
-  - Yes! stored in st folder 
-
-```{r residuals from st random fields?}
-pred_list <- list()
-
-for(i in unique(d$group)) { 
-    
-    dd <- d |> filter(group == i)
-
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
-
-    # this is m3 (bp oxy)
-    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(link1 = "logit", link2 = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year",
-                 control = sdmTMBcontrol(newton_loops = 2))
-        
-    # Check again to be safe...
-    sanity(m3)
-
-    dd$res_1 <- residuals(m3, model = 1)
-    dd$res_2 <- residuals(m3, model = 2)
-    
-    p1 <- ggplot(dd, aes(sample = res_1)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = "Binomial") + 
-      theme(aspect.ratio = 1)
-    
-    p2 <- ggplot(dd, aes(sample = res_2)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = "Gamma") + 
-      theme(aspect.ratio = 1)
-    
-    p1 + p2 
-    ggsave(paste0(home, "/figures/supp/qq-sdm-01/st-fields/qq_", i, ".pdf"),
-           width = 17, height = 11, units = "cm")
-    
-}
-```
-
-- Next I want to know if ST or not affects the AIC result. The latest delta gamma suggests bp oxygen is best. 
-  - it does not! saved as AICst
-
-- I need to know how ST fields affects parameter estimates.
-  - Not really in a systematic way as far as I can see!
-
-```{r compare parameter estimates using cod}
-data_list_pars <- list()
-
-for(i in unique(d$group)) {  
-    
-    dd <- d |> filter(group == i)
-    
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
-
-    # 3. breakpoint oxygen
-    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(link1 = "logit", link2 = "log"),
-                 spatiotemporal = "off",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year",
-                 control = sdmTMBcontrol(newton_loops = 2))
-
-    m3st <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(link1 = "logit", link2 = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year",
-                 control = sdmTMBcontrol(newton_loops = 2))    
-    
-    coef_m3 <- tidy(m3, conf.int = TRUE) |> filter(!grepl('year', term)) |> mutate(st = "no", model = "m3", group = i)
-    coef_m3st <- tidy(m3_st, conf.int = TRUE) |> filter(!grepl('year', term)) |> mutate(st = "yes", model = "m3", group = i)
-
-    data_list_pars[[i]] <- bind_rows(coef_m3, coef_m3st)
-    
-}
-
-# Save predictions and sims as data frames
-data_pars <- bind_rows(data_list_pars)
-
-write_csv(data_pars, paste0(home, "/output/data_pars_test_st.csv"))
-
-# Plot!
-data_pars |> 
-  ggplot(aes(term, estimate, ymin = conf.low, ymax = conf.high, color = st)) + 
-  geom_point(position = position_dodge(width = 0.3)) + 
-  geom_errorbar(width = 0, position = position_dodge(width = 0.3)) + 
-  facet_wrap(~group, scales = "free", ncol = 2) +
-  geom_hline(yintercept = 0, linetype = 2, alpha = 0.3) +
-  coord_flip() + 
-  scale_color_brewer(palette = "Set1")
-
-ggsave("figures/st_par_comparison.pdf", width = 17, height = 17, units = "cm")
-```
-
-- So does this mean I can use a tweedie? Seems that ST was the main thing messing up the residuals anyway..
-
-```{r}
-dd <- d |> filter(group == "cod_adult")
-    
-mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
-
-m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-             data = dd,
-             mesh = mesh,
-             family = delta_gamma(link1 = "logit", link2 = "log"),
-             spatiotemporal = "IID",
-             spatial = "off",
-             spatial_varying = ~0 + quarter_f,
-             time = "year",
-             control = sdmTMBcontrol(newton_loops = 2))
-
-m3_tweedie <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                     data = dd,
-                     mesh = mesh,
-                     family = tweedie(link = "log"),
-                     spatiotemporal = "IID",
-                     spatial = "off",
-                     spatial_varying = ~0 + quarter_f,
-                     time = "year",
-                     control = sdmTMBcontrol(newton_loops = 2))
+p6 <- ggplot() +
+  inlabru::gg(mesh_g6$mesh) +
+  coord_fixed() +
+  geom_point(aes(X, Y), data = g6, alpha = 0.2, size = 0.5) +
+  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g6$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
+  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g6$group[], "_", " "))) +
+  theme_sleek(base_size = 8) +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"))
 
 
-dd$res_1 <- residuals(m3, model = 1)
-dd$res_2 <- residuals(m3, model = 2)
-dd$res <- residuals(m3_tweedie)
-    
-p1 <- ggplot(dd, aes(sample = res_1)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = "Binomial") + 
-      theme(aspect.ratio = 1)
-    
-p2 <- ggplot(dd, aes(sample = res_2)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = "Gamma") + 
-      theme(aspect.ratio = 1)
-    
-p3 <- ggplot(dd, aes(sample = res)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles", title = "Tweedie") + 
-      theme(aspect.ratio = 1)
+p1 + p2 + p3 + p4 + p5 + p6
 
-(p1 + p2) / (plot_spacer() + p3)
+ggsave(paste0(home, "/figures/supp/mesh.pdf"), width = 17, height = 11, units = "cm", device = cairo_pdf)
 
-ggsave("figures/tweedie_delta_st_comp_qq.pdf", width = 17, height = 17, units = "cm")
-```
-
-Test the above for all species
-
-```{r}
-for(i in unique(d$group)) { 
-    
-    dd <- d |> filter(group == i)
-
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
-
-    # This is m3 (bp oxy)
-    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = tweedie(link = "log"),
-                 spatiotemporal = "AR1",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year",
-                 control = sdmTMBcontrol(newton_loops = 2))
-        
-    # Check again to be safe...
-    sanity(m3)
-
-    samps <- sdmTMBextra::predict_mle_mcmc(m3, mcmc_iter = 201, mcmc_warmup = 200)
-    mcmc_res <- residuals(m3, type = "mle-mcmc", mcmc_samples = samps)
-    
-    ggplot(dd, aes(sample = mcmc_res)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") + 
-      theme(aspect.ratio = 1)
-
-    ggsave(paste0(home, "/figures/supp/qq-sdm-01/st-fields-tweedie-ar1/qq_", i, ".pdf"),
-           width = 11, height = 11, units = "cm")
-    
-}
 ```
 

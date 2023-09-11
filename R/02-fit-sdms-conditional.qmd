@@ -90,12 +90,12 @@ d <- d |> filter(!species == "dab")
 ```{r}
 d <- d |> 
   group_by(group) |> 
-  mutate(temp_sc = scale(temp),
+  mutate(temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
-         oxy_sc = scale(oxy),
+         oxy_sc = as.vector(scale(oxy)),
          oxy_sq = oxy_sc^2,
-         sal_sc = scale(sal),
-         depth_sc = scale(depth),
+         sal_sc = as.vector(scale(sal)),
+         depth_sc = as.vector(scale(depth)),
          depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
   mutate(quarter_f = as.factor(quarter),
          year_f = as.factor(year)) |> 
@@ -129,6 +129,7 @@ Plot residuals, save model object, plot conditional effects!
 ```{r}
 pred_list <- list()
 pred_grid_list <- list()
+res_list <- list()
 
 for(i in unique(d$group)) { 
     
@@ -136,11 +137,10 @@ for(i in unique(d$group)) {
 
     mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
 
-    # this is m3 (bp oxy)
+    # this is m3 (bp oxy), favoured by all!
     m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
                  data = dd,
                  mesh = mesh,
-                 #family = delta_gamma(link1 = "logit", link2 = "log"),
                  family = tweedie(link = "log"),
                  spatiotemporal = "IID",
                  spatial = "off",
@@ -153,18 +153,11 @@ for(i in unique(d$group)) {
     # Plot residuals
     samps <- sdmTMBextra::predict_mle_mcmc(m3, mcmc_iter = 201, mcmc_warmup = 200)
     mcmc_res <- residuals(m3, type = "mle-mcmc", mcmc_samples = samps)
-
-    p1 <- ggplot(dd, aes(sample = mcmc_res)) +
-      stat_qq() +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
-      theme(aspect.ratio = 1)
-
-    print(p1)
-
-    ggsave(paste0(home, "/figures/supp/qq-sdm-02/qq_", i, ".pdf"),
-           width = 17, height = 11, units = "cm")
-
+    dd$res <- as.vector(mcmc_res)
+    
+    # Store residuals
+    res_list[[i]] <- dd
+    
     # Save model object
     saveRDS(m3, paste0(home, "/output/models/sdm_02_m3_", i, ".rds"))
      
@@ -201,11 +194,30 @@ for(i in unique(d$group)) {
 # Save predictions and sims as data frames
 preds <- dplyr::bind_rows(pred_list)
 preds_grid <- dplyr::bind_rows(pred_grid_list)
+res <- dplyr::bind_rows(res_list)
 ```
 
-# Save
+## Plot residuals
 
 ```{r}
+# Plot residuals
+res |> 
+  mutate(group2 = str_replace(group, "_", " "),
+         group2 = str_to_title(group2)) |> 
+  ggplot(aes(sample = res)) +
+  stat_qq(size = 0.75, shape = 21, fill = NA) +
+  facet_wrap(~group2) +
+  stat_qq_line() +
+  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+  theme(aspect.ratio = 1)
+
+ggsave(paste0(home, "/figures/supp/qq_sdm_02.pdf"), width = 17, height = 17, units = "cm")
+```
+
+## Save
+
+```{r}
+write_csv(res, paste0(home, "/output/residuals_02_sdms.csv"))
 write_csv(preds, paste0(home, "/output/data_conditional_02_sdms.csv"))
 write_csv(preds_grid, paste0(home, "/output/data_pred_grids_02_sdms.csv"))
 ```
