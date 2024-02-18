@@ -11,7 +11,7 @@ sf::sf_use_s2(FALSE)
 ymin = 52; ymax = 60.75; xmin = 10; xmax = 24
 
 map_data <- rnaturalearth::ne_countries(
-  scale = "medium",
+  scale = "large",
   returnclass = "sf", continent = "europe")
 
 # Crop the polygon for plotting and efficiency:
@@ -72,7 +72,7 @@ plot_map_fc <-
 plot_map_labels <- 
   plot_map + 
   annotate("text", label = "Sweden", x = xmin2 + 0.25*xrange, y = ymin2 + 0.75*yrange, color = "gray50", size = 1.9) +
-  annotate("text", label = "Denmark", x = xmin2 + 0.029*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.9, angle = 75) +
+  annotate("text", label = "Denmark", x = xmin2 + 0.012*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.9, angle = 75) +
   annotate("text", label = "Germany", x = xmin2 + 0.07*xrange, y = ymin2 + 0.022*yrange, color = "gray50", size = 1.9) +
   annotate("text", label = "Poland", x = xmin2 + 0.55*xrange, y = ymin2 + 0.08*yrange, color = "gray50", size = 1.9) +
   annotate("text", label = "Russia", x = xmin2 + 0.95*xrange, y = ymin2 + 0.18*yrange, color = "gray50", size = 1.9) +
@@ -82,8 +82,8 @@ plot_map_labels <-
 plot_map_labels_fc <- 
   plot_map_fc + 
   annotate("text", label = "Sweden", x = xmin2 + 0.25*xrange, y = ymin2 + 0.75*yrange, color = "gray50", size = 1.9) +
-  annotate("text", label = "Denmark", x = xmin2 + 0.029*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.9, angle = 75) +
-  annotate("text", label = "Germany", x = xmin2 + 0.07*xrange, y = ymin2 + 0.022*yrange, color = "gray50", size = 1.9) +
+  annotate("text", label = "Denmark", x = xmin2 + 0.012*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.9, angle = 75) +
+  annotate("text", label = "Germany", x = xmin2 + 0.05*xrange, y = ymin2 + 0.022*yrange, color = "gray50", size = 1.9) +
   annotate("text", label = "Poland", x = xmin2 + 0.55*xrange, y = ymin2 + 0.08*yrange, color = "gray50", size = 1.9) +
   annotate("text", label = "Russia", x = xmin2 + 0.95*xrange, y = ymin2 + 0.18*yrange, color = "gray50", size = 1.9) +
   annotate("text", label = "Lithuania", x = xmin2 + 1*xrange, y = ymin2 + 0.43*yrange, color = "gray50", size = 1.9, angle = 75) +
