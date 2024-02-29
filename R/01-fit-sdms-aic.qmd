@@ -1,25 +1,23 @@
 ---
-title: "Fit tweedie/delta models to biomass density and extract AIC"
+title: "Fit tweedie models to biomass density and extract AIC"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
+    page-layout: full
     embed-resources: true
-    fig-width: 8
-    #fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
 
 ## Intro
 
-Fit Tweedie or delta models models to biomass density of cod, flounder, plaice and dab (juveniles and adults) between 1993-2020 in the Baltic Sea using sdmMTB fit different oxygen and temperature-related covariates, compare AIC. Select the "best" covariate for further trend and velocity analysis.
+Fit Tweedie models to biomass density of cod, flounder, plaice and dab (juveniles and adults) between 1993-2020 in the Baltic Sea using sdmMTB fit different oxygen and temperature-related covariates, compare AIC. Select the "best" covariate for further trend and velocity analysis.
 
 ## Load packages & source functions
 
@@ -28,7 +26,7 @@ Fit Tweedie or delta models models to biomass density of cod, flounder, plaice a
 #| warning: false
 
 # Load libraries, install if needed
-pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools",
+pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "patchwork",
           "kableExtra", "viridis", "RColorBrewer", "here", "sdmTMBextra") 
 
 if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
@@ -45,7 +43,7 @@ library(sdmTMB)
 
 # Source code for map plots
 # You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
-devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
 
 # Set path
@@ -56,24 +54,24 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
-  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
-  rename(X = x, Y = y) |> 
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>% %>% 
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
+  rename(X = x, Y = y) %>% 
   pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
                  flounder_juvenile, plaice_adult, plaice_juvenile),
-               names_to = "group", values_to = "density") |> 
-  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+               names_to = "group", values_to = "density") %>% 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
   drop_na(depth, temp, oxy, sal, density)
 
 # Read metabolic parameter estimates and left_join
-mi_pars <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") |>
-  readr::read_csv(paste0(home, "/data/clean/mi_params.csv")) |> 
+mi_pars <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") %>%
+  readr::read_csv(paste0(home, "/data/clean/mi_params.csv")) %>% 
   dplyr::select(n_o2, E_o2, A0_o2, species) #  TODO: remove the extra columns for pressure based parameters
 
 # TODO: for now we'll use plaice parameters for flounder, see "00_estimate_mi_params.Rmd"
 mi_pars
 
-mi_pars <- mi_pars |> 
+mi_pars <- mi_pars %>% 
   mutate(A0_o2 = ifelse(species == "flounder",
                         filter(mi_pars, species == "plaice")$A0_o2,
                         A0_o2))
@@ -81,31 +79,31 @@ mi_pars <- mi_pars |>
 d <- left_join(d, mi_pars, by = "species")
 
 # Read size csv to calculate the metabolic index
-sizes <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") |> 
-  readr::read_csv(paste0(home, "/data/clean/sizes.csv")) |>
-  mutate(group = paste(species, name, sep = "_")) |> 
+sizes <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") %>% 
+  readr::read_csv(paste0(home, "/data/clean/sizes.csv")) %>%
+  mutate(group = paste(species, name, sep = "_")) %>% 
   dplyr::select(group, B)
 
 d <- left_join(d, sizes, by = "group")
 
 # Drop dab!
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 1) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+# d %>%
+#   filter(group == "dab_juvenile" & quarter == 1) %>%
+#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
 #   ggplot(aes(X, Y, color = pres)) +
 #   geom_point(size = 0.3) +
 #   coord_fixed() +
 #   facet_wrap(~year)
 # 
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 4) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+# d %>%
+#   filter(group == "dab_juvenile" & quarter == 4) %>%
+#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
 #   ggplot(aes(X, Y, color = pres)) +
 #   geom_point(size = 0.3) +
 #   coord_fixed() +
 #   facet_wrap(~year)
 
-d <- d |> filter(!species == "dab")
+d <- d %>% filter(!species == "dab")
 ```
 
 ## Calculate the metabolic index
@@ -120,17 +118,17 @@ kb <- 0.000086173324 # Boltzmann's constant
 t_ref <- 15 # arbitrary reference temperature
 
 # Calculate the metabolic index
-d <- d |>
+d <- d %>%
   mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
-         phi = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp)) |> 
+         phi = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp)) %>% 
   drop_na(phi)
 ```
 
 ## Scale variables
 
 ```{r}
-d <- d |> 
-  group_by(group) |> 
+d <- d %>% 
+  group_by(group) %>% 
   mutate(phi_sc = as.vector(scale(phi)),
          temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
@@ -138,9 +136,9 @@ d <- d |>
          oxy_sq = oxy_sc^2,
          sal_sc = as.vector(scale(sal)),
          depth_sc = as.vector(scale(depth)),
-         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+         depth_sq = depth_sc*depth_sc) %>%
   mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) |> 
+         year_f = as.factor(year)) %>% 
   ungroup()
 
 # Seems like a non-linear relationship with temperature, but a quadratic largely does the job??
@@ -167,9 +165,9 @@ ggplot(d, aes(phi_sc, log(density + 1))) +
 # Plot mi by species and life stage
 pal <- brewer.pal(name = "Dark2", n = 8)[c(7, 5, 3)]
 
-d |> 
+d %>% 
   mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) |> 
+         life_stage = str_to_title(life_stage)) %>% 
   ggplot(aes(phi, fill = species, color = species)) + 
   geom_density(alpha = 0.2) + 
   geom_vline(xintercept = 0, linetype = 2) + 
@@ -193,7 +191,7 @@ data_list_aic <- list()
 
 for(i in unique(d$group)) {  
     
-    dd <- d |> filter(group == i)
+    dd <- d %>% filter(group == i)
     
     mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
     
@@ -307,17 +305,9 @@ for(i in unique(d$group)) {
     # dd$m7_res <- residuals(m7)
     
     # Plot residuals
-    p1 <- dd |>
-      dplyr::select(m0_res,
-                    m1_res,
-                    m2_res,
-                    m3_res,
-                    #m4_res,
-                    m5_res,
-                    m6_res,
-                    #m7_res
-                    ) |>
-      pivot_longer(everything()) |>
+    p1 <- dd %>%
+      dplyr::select(m0_res, m1_res, m2_res, m3_res, m5_res, m6_res) %>%
+      pivot_longer(everything()) %>%
       ggplot(aes(sample = value)) +
       stat_qq(size = 0.75, shape = 21, fill = NA) +
       facet_wrap(~name) +
@@ -328,16 +318,8 @@ for(i in unique(d$group)) {
     print(p1)
 
     # Save AIC
-    data_list_aic[[i]] <- AIC(m0, 
-                              m1,
-                              m2,
-                              m3,
-                              #m4,
-                              m5,
-                              m6#,
-                              #m7
-                              ) |>
-      tibble::rownames_to_column("model") |>
+    data_list_aic[[i]] <- AIC(m0, m1, m2, m3, m5, m6) %>%
+      tibble::rownames_to_column("model") %>%
       mutate(group = i)
     
 }
@@ -351,22 +333,22 @@ write_csv(data_aic, paste0(home, "/output/data_aic_01.csv"))
 ## Plot meshes in a single plot using patchwork
 
 ```{r}
-g1 <- d |> filter(group == unique(d$group)[1])
+g1 <- d %>% filter(group == unique(d$group)[1])
 mesh_g1 <- make_mesh(g1, xy_cols = c("X", "Y"), cutoff = 15)
 
-g2 <- d |> filter(group == unique(d$group)[5])
+g2 <- d %>% filter(group == unique(d$group)[5])
 mesh_g2 <- make_mesh(g2, xy_cols = c("X", "Y"), cutoff = 15)
 
-g3 <- d |> filter(group == unique(d$group)[3])
+g3 <- d %>% filter(group == unique(d$group)[3])
 mesh_g3 <- make_mesh(g3, xy_cols = c("X", "Y"), cutoff = 15)
 
-g4 <- d |> filter(group == unique(d$group)[2])
+g4 <- d %>% filter(group == unique(d$group)[2])
 mesh_g4 <- make_mesh(g4, xy_cols = c("X", "Y"), cutoff = 15)
 
-g5 <- d |> filter(group == unique(d$group)[6])
+g5 <- d %>% filter(group == unique(d$group)[6])
 mesh_g5 <- make_mesh(g5, xy_cols = c("X", "Y"), cutoff = 15)
 
-g6 <- d |> filter(group == unique(d$group)[4])
+g6 <- d %>% filter(group == unique(d$group)[4])
 mesh_g6 <- make_mesh(g6, xy_cols = c("X", "Y"), cutoff = 15)
 
 
@@ -441,10 +423,7 @@ p6 <- ggplot() +
         axis.ticks.y = element_blank(),
         plot.margin = unit(c(0,0,0,0), "cm"))
 
-
 p1 + p2 + p3 + p4 + p5 + p6
 
 ggsave(paste0(home, "/figures/supp/mesh.pdf"), width = 17, height = 11, units = "cm", device = cairo_pdf)
-
 ```
-

@@ -1,20 +1,18 @@
 ---
 title: "Fit tweedie/delta models to biomass density"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
+    page-layout: full
     embed-resources: true
-    fig-width: 8
-    #fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
 
 ## Intro
@@ -28,7 +26,7 @@ Fit climate-agnostic sdms for calculating biomass trends and velocities
 #| warning: false
 
 # Load libraries, install if needed
-pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools",
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "modelr", "ggtext",
           "viridis", "RColorBrewer", "here", "sdmTMBextra") 
 
 if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
@@ -44,8 +42,7 @@ invisible(lapply(pkgs, library, character.only = T))
 library(sdmTMB)
 
 # Source code for map plots
-# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
-devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
 
 # Set path
@@ -56,50 +53,34 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
-  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
-  rename(X = x, Y = y) |> 
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>%
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
+  rename(X = x, Y = y) %>%
   pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
                  flounder_juvenile, plaice_adult, plaice_juvenile),
-               names_to = "group", values_to = "density") |> 
-  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+               names_to = "group", values_to = "density") %>% 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
   drop_na(depth, temp, oxy, sal, density)
 
-# Drop dab!
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 1) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-# 
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 4) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-
-d <- d |> filter(!species == "dab")
+d <- d %>% filter(!species == "dab")
 ```
 
 ## Scale variables
 
 ```{r}
-d <- d |> 
-  group_by(group) |> 
+d <- d %>% 
   mutate(temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
          oxy_sc = as.vector(scale(oxy)),
          oxy_sq = oxy_sc^2,
          sal_sc = as.vector(scale(sal)),
          depth_sc = as.vector(scale(depth)),
-         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
-  mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) |> 
-  ungroup()
+         depth_sq = depth_sc*depth_sc,
+         quarter_f = as.factor(quarter),
+         year_f = as.factor(year),
+         year_ct = year - mean(year),
+         year_sc = (year - mean(year)) / sd(year)) %>% 
+  filter(quarter == 4)
 ```
 
 ## Read and scale the prediction grid
@@ -109,132 +90,131 @@ pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2)
                        readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
 # Scale variables with respect to data, not the prediction grid!
-pred_grid <- pred_grid |> 
-  drop_na(depth, temp, oxy, sal) |> 
+pred_grid <- pred_grid %>% 
+  drop_na(depth, temp, oxy, sal) %>% 
   mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
          temp_sq = temp_sc^2,
          oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy),
          oxy_sq = oxy_sc^2,
          sal_sc = (sal - mean(d$sal)) / sd(d$sal),
          depth_sc = (depth - mean(d$depth)) / sd(d$depth),
-         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
-  mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) |> 
-  ungroup()
-
-# We will join the MI with the prediction grid in the for loop. Before doing that, prepare it by calculating some extra variables
-
-# Oxygen is ml/L, We want micro mol/L. 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
-pred_grid$oxy_si <- (pred_grid$oxy * (10^3)) / 22.391
-
-# Line 123 in https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/mi_functions.R
-# Define the constants
-kb <- 0.000086173324 # Boltzmann's constant
-t_ref <- 15 # arbitrary reference temperature
-```
-
-## Calculate the metabolic index
-
-```{r}
-# Read metabolic parameter estimates and left_join
-mi_pars <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") |> 
-  readr::read_csv(paste0(home, "/data/clean/mi_params.csv")) |>
-  dplyr::select(-temp) |> 
-  dplyr::select(-po2, -A0_po2, -E_po2, -n_po2) # these pressure-based parameters are not needed
-
-# For now we'll use plaice parameters for flounder, see "00_estimate_mi_params.Rmd"
-mi_pars2 <- mi_pars
-mi_pars2[4, c(4:5)] <- mi_pars2[1, c(4:5)]
-
-# Read representative size csv to calculate the metabolic index
-sizes <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") |> 
-  mutate(group = paste(species, name, sep = "_")) |> 
-  dplyr::select(group, B) |> 
-  separate(group, into = c("species", "life_stage"), sep = "_", remove = FALSE)
-
-# Join the species-based MI pars with the species + life_stage-based size data
-# This dataframe can be joined with the prediction data-frame in the for loop below
-mi <- sizes |>
-  left_join(mi_pars2, by = "species")
+         depth_sq = depth_sc*depth_sc,
+         quarter_f = as.factor(quarter),
+         year_ct = year - mean(d$year),
+         year_sc = (year - mean(d$year)) / sd(d$year)) %>% 
+  filter(quarter == 4)
 ```
 
 ## Fit the model that is preferred by most (m3, i.e., temp + temp_sq + bp_oxyg) 
+Use only quarter 4 since that's what we are looking for (warmer and less oxygen than q1), 
+and not also we use a spatial trend model
 Plot residuals, save model object, plot conditional effects!
 
-```{r}
+```{r fit random model to get spatial trend}
+# https://pbs-assess.github.io/sdmTMB/articles/spatial-trend-models.html
+
 pred_grid_list <- list()
 res_list <- list()
 
 for(i in unique(d$group)) { 
     
-    dd <- d |> filter(group == i)
+  dd <- d %>%
+    filter(group == i & quarter == 4)
+  
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+  
+  plot(mesh)
+  
+  # This is a variant of the main model without environmental fixed effects
+  # FIXME: finalize model structure poisson-link... 
+  m <- sdmTMB(density ~ 0 + year_sc + depth_sc + depth_sq,
+              data = dd,
+              mesh = mesh,
+              family = delta_lognormal(type = "poisson-link"), # because we want to combine the spatial trends!
+              spatiotemporal = "IID",
+              spatial = "on",
+              spatial_varying = ~0 + year_sc,
+              time = "year")
 
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+  # Check the model converges
+  sanity(m)
+  tidy(m, "ran_pars", conf.int = TRUE, model = 1)
+  #tidy(m, "ran_pars", conf.int = TRUE, model = 2)
 
-    # this is a variant of without fixed effects
-    m <- sdmTMB(density ~ 0 + year_f + quarter_f + depth_sc + depth_sq,
-                data = dd,
-                mesh = mesh,
-                family = tweedie(link = "log"),
-                spatiotemporal = "IID",
-                spatial = "off",
-                spatial_varying = ~0 + quarter_f,
-                time = "year")
-        
-    # Check again to be safe...
-    sanity(m)
+  # Plot residuals
+  # dd$res1 <- residuals(m_test3, model = 1)
+  # dd$res2 <- residuals(m_test2, model = 2)
+  # 
+  # qqnorm(dd$res1); qqline(dd$res1)
+  # qqnorm(dd$res2[is.finite(dd$res2)]); qqline(dd$res2[is.finite(dd$res2)])
 
-    # Plot residuals
-    samps <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200)
-    mcmc_res <- residuals(m, type = "mle-mcmc", mcmc_samples = samps)
-    dd$res <- as.vector(mcmc_res)
+  # MCMC 
+  samps1 <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200, model = 1)
+  samps2 <- sdmTMBextra::predict_mle_mcmc(m, mcmc_iter = 201, mcmc_warmup = 200, model = 2)
+  dd$mcmc_res1 <- as.vector(residuals(m, type = "mle-mcmc", mcmc_samples = samps1, model = 1))
+  dd$mcmc_res2 <- as.vector(residuals(m, type = "mle-mcmc", mcmc_samples = samps2, model = 2))
+  qqnorm(dd$mcmc_res1);qqline(dd$mcmc_res1)
+  qqnorm(dd$mcmc_res2[is.finite(dd$mcmc_res2)]); qqline(dd$mcmc_res2[is.finite(dd$mcmc_res2)])
+  
+  # Store residuals
+  res_list[[i]] <- dd
+  
+  # Predict on grid 
+  p <- predict(m, newdata = pred_grid) %>%
+    mutate(group = i)
+  
+  names(p)
+  
+  plot_map_fc +
+    geom_raster(data = p, aes(X*1000, Y*1000, fill = zeta_s_year_sc1)) +
+    scale_fill_gradient2()
 
-    # Store residuals
-    res_list[[i]] <- dd
+  plot_map_fc +
+    geom_raster(data = p, aes(X*1000, Y*1000, fill = zeta_s_year_sc2)) +
+    scale_fill_gradient2()
     
-    # Save model object
-    saveRDS(m, paste0(home, "/output/models/sdm_04_random_", i, ".rds"))
-    
-    # Predict on grid 
-    p <- predict(m, newdata = pred_grid) |>
-      mutate(group = i)
-    
-    # Calculate concentration-based metabolic index
-    p <- p |>
-      left_join(mi, by = "group") |> 
-      mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
-             phi = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp))
-
-    # Save
-    pred_grid_list[[i]] <- p
+  # Save
+  pred_grid_list[[i]] <- p
     
 }
 
 # Save predictions and sims as data frames
-preds_grid <- dplyr::bind_rows(pred_grid_list) |> as.data.frame()
-res <- dplyr::bind_rows(res_list) |> as.data.frame()
-```
-
-## Plot residuals
-
-```{r}
-# Plot residuals
-res |> 
-  mutate(group2 = str_replace(group, "_", " "),
-         group2 = str_to_title(group2)) |> 
-  ggplot(aes(sample = res)) +
-  stat_qq(size = 0.75, shape = 21, fill = NA) +
-  facet_wrap(~group2) +
-  stat_qq_line() +
-  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
-  theme(aspect.ratio = 1)
-
-ggsave(paste0(home, "/figures/supp/qq_sdm_04.pdf"), width = 17, height = 17, units = "cm")
+preds_grid <- dplyr::bind_rows(pred_grid_list) %>% as.data.frame()
+res <- dplyr::bind_rows(res_list) %>% as.data.frame()
 ```
 
 ## Save
 
 ```{r}
 write_csv(res, paste0(home, "/output/residuals_04_sdms.csv"))
-write_csv(preds_grid, paste0(home, "/output/data_pred_grids_04_random_sdms.csv"))
+write_csv(preds_grid, paste0(home, "/output/pred_grids_04_random_sdms.csv"))
+```
+
+## Plot residuals
+
+```{r}
+# Plot residuals
+res %>% 
+  mutate(group2 = str_replace(group, "_", " "),
+         group2 = str_to_title(group2)) %>% 
+  ggplot(aes(sample = mcmc_res1)) +
+  stat_qq(size = 0.75, shape = 21, fill = NA) +
+  facet_wrap(~group2) +
+  stat_qq_line() +
+  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+  theme(aspect.ratio = 1)
+
+ggsave(paste0(home, "/figures/supp/qq_sdm_04_model1.pdf"), width = 17, height = 17, units = "cm")
+
+res %>% 
+  mutate(group2 = str_replace(group, "_", " "),
+         group2 = str_to_title(group2)) %>% 
+  ggplot(aes(sample = mcmc_res2)) +
+  stat_qq(size = 0.75, shape = 21, fill = NA) +
+  facet_wrap(~group2) +
+  stat_qq_line() +
+  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
+  theme(aspect.ratio = 1)
+
+ggsave(paste0(home, "/figures/supp/qq_sdm_04_model2.pdf"), width = 17, height = 17, units = "cm")
 ```

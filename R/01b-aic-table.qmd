@@ -1,23 +1,19 @@
 ---
 title: "AIC table"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
     page-layout: full
     embed-resources: true
-    fig-width: 8
-    #fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
-
 
 ## Load packages & source functions
 
@@ -43,7 +39,11 @@ home <- here::here()
 ## Plot AIC
 
 ```{r}
-aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) |> 
+read_csv(paste0(home, "/output/data_aic_01.csv")) %>% 
+  group_by(group) %>% 
+  filter(AIC == min(AIC))
+
+aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) %>% 
   mutate(formula = ifelse(model == "m0", "*temp+oxy*", NA),
          formula = ifelse(model == "m1", "*temp+temp<sup>2</sup>+oxy*", formula),
          formula = ifelse(model == "m2", "*temp×oxy*", formula),
@@ -52,14 +52,14 @@ aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) |>
          formula = ifelse(model == "m5", "*\u03C6*", formula),
          formula = ifelse(model == "m6", "*bp(\u03C6)*", formula)#,
          #formula = ifelse(model == "m7", "logistic(phi)", formula)
-         ) |> 
-  group_by(group) |> 
+         ) %>% 
+  group_by(group) %>% 
   mutate(delta_aic = AIC - min(AIC),
-         Favoured = ifelse(delta_aic < 2, "Y", "N")) |> 
-  ungroup() |> 
-  separate(group, into = c("species", "life_stage")) |> 
+         Favoured = ifelse(delta_aic < 2, "Y", "N")) %>% 
+  ungroup() %>% 
+  separate(group, into = c("species", "life_stage")) %>% 
   mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) |> 
+         life_stage = str_to_title(life_stage)) %>% 
   mutate(group2 = paste(species, life_stage))
   
 order <- unique(aic$formula)
@@ -82,16 +82,16 @@ ggplot(aic, aes(group2, delta_aic, color = factor(formula, levels = order),
 #ggsave(paste0(home, "/figures/aic.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
 
 # As table..
-aic2 <- aic |> 
-  #mutate(group2 = paste(AIC, species, life_stage, sep = "_")) |> 
-  dplyr::select(group2, formula, delta_aic, Favoured) |> 
+aic2 <- aic %>% 
+  #mutate(group2 = paste(AIC, species, life_stage, sep = "_")) %>% 
+  dplyr::select(group2, formula, delta_aic, Favoured) %>% 
   pivot_wider(names_from = group2, values_from = delta_aic)
 
-aict <- aic |> 
-  mutate(delta_aic = round(delta_aic, digits = 2)) |> 
-  mutate(delta_aic = ifelse(delta_aic == 0, "**0**", delta_aic)) |> 
-  dplyr::select(group2, formula, delta_aic) |> 
-  pivot_wider(names_from = group2, values_from = delta_aic) |> 
+aict <- aic %>% 
+  mutate(delta_aic = round(delta_aic, digits = 2)) %>% 
+  mutate(delta_aic = ifelse(delta_aic == 0, "**0**", delta_aic)) %>% 
+  dplyr::select(group2, formula, delta_aic) %>% 
+  pivot_wider(names_from = group2, values_from = delta_aic) %>% 
   rename(Formula = formula, 
          "AIC<sub>cod,adu</sub>" = `Cod Adult`,
          "AIC<sub>cod,juv</sub>" = `Cod Juvenile`,
@@ -99,9 +99,9 @@ aict <- aic |>
          "AIC<sub>plaice,juv</sub>" = `Plaice Juvenile`,
          "AIC<sub>flounder,adu</sub>" = `Flounder Adult`,
          "AIC<sub>flounder,juv</sub>" = `Flounder Juvenile`
-         ) |> as.data.frame()
+         ) %>% as.data.frame()
 
-kableExtra::kbl(aict, format = "markdown") |>
+kableExtra::kbl(aict, format = "markdown") %>%
   kable_styling(font_size = 20)
 
 write.csv(aict, paste0(home, "/figures/aic_table.csv"))

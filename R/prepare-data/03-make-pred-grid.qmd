@@ -1,20 +1,18 @@
 ---
 title: "Make the prediction grid"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
+    page-layout: full
     embed-resources: true
-    fig-width: 8
-    fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
 
 ## Intro
@@ -49,7 +47,7 @@ Read data and depth-raster
 
 ```{r data}
 # Read data
-d <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |> 
+d <- readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>% 
   rename(X = x, Y = y)
 ```
 
@@ -82,7 +80,7 @@ pred_grid <- expand.grid(
   year = c(1993:2021)
   )
 
-ggplot(pred_grid |> filter(year == 2019), aes(X, Y)) +
+ggplot(pred_grid %>% filter(year == 2019), aes(X, Y)) +
   geom_point(size = 0.1) +
   theme_void() +
   coord_sf()
@@ -106,7 +104,7 @@ plot_map +
 # Add lat and lon
 # Need to go from UTM to lat long for this one...
 # https://stackoverflow.com/questions/30018098/how-to-convert-utm-coordinates-to-lat-and-long-in-r
-xy <- as.matrix(pred_grid |> dplyr::select(X, Y) |> mutate(X = X*1000, Y = Y*1000))
+xy <- as.matrix(pred_grid %>% dplyr::select(X, Y) %>% mutate(X = X*1000, Y = Y*1000))
 v <- vect(xy, crs="+proj=utm +zone=33 +datum=WGS84  +units=m")
 y <- project(v, "+proj=longlat +datum=WGS84")
 lonlat <- geom(y)[, c("x", "y")]
@@ -125,19 +123,19 @@ crs(dep_raster, proj = TRUE)
 
 plot(dep_raster)
 
-pred_grid$depth <- terra::extract(dep_raster, pred_grid |> dplyr::select(lon, lat))$elevation
+pred_grid$depth <- terra::extract(dep_raster, pred_grid %>% dplyr::select(lon, lat))$elevation
 
 ggplot(pred_grid, aes(lon, lat, color = depth*-1)) + 
   geom_point()
 
 pred_grid$depth <- pred_grid$depth*-1
 
-pred_grid <- pred_grid |> drop_na(depth)
+pred_grid <- pred_grid %>% drop_na(depth)
 
-pred_grid |> 
-  filter(year == 1999) |> 
-  drop_na(depth) |> 
-  #mutate(water = ifelse(depth < 0.00000001, "N", "Y")) |> 
+pred_grid %>% 
+  filter(year == 1999) %>% 
+  drop_na(depth) %>% 
+  #mutate(water = ifelse(depth < 0.00000001, "N", "Y")) %>% 
   ggplot(aes(X*1000, Y*1000, fill = depth)) + 
   geom_raster() +
   NULL
@@ -155,48 +153,48 @@ plot_map +
 First add lat and lon based on X and Y (utm)
 
 ```{r substrate}
-substrate <- terra::rast(paste0(home, "/data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif"))
-
-newcrs <- "+proj=longlat +datum=WGS84"
-
-substrate_longlat = terra::project(substrate, newcrs)
- 
-plot(substrate_longlat)
-
-# Now extract the values from the saduria raster to pred_grid
-pred_grid$substrate <- terra::extract(substrate_longlat, pred_grid |> dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
-
-unique(pred_grid$substrate)
-
-factor(sort(unique(round(pred_grid$substrate))))
- 
-pred_grid$substrate <- round(pred_grid$substrate)
-
-pred_grid <- pred_grid %>% mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
-                                  substrate = ifelse(substrate == 2, "hard-bottom complex", substrate),
-                                  substrate = ifelse(substrate == 3, "sand", substrate),
-                                  substrate = ifelse(substrate == 4, "hard clay", substrate),
-                                  substrate = ifelse(substrate == 5, "mud", substrate))
-
-# I. Bedrock.
-# II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
-# III. Sand including fine to coarse sand (with gravel exposures).
-# IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
-# V. Mud including gyttja-clay to gyttja-silt.
-
-# Plot
-ggplot(pred_grid, aes(X, Y, fill = substrate)) +
-  geom_raster() +
-  coord_sf()
+# substrate <- terra::rast(paste0(home, "/data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif"))
+# 
+# newcrs <- "+proj=longlat +datum=WGS84"
+# 
+# substrate_longlat = terra::project(substrate, newcrs)
+#  
+# plot(substrate_longlat)
+# 
+# # Now extract the values from the saduria raster to pred_grid
+# pred_grid$substrate <- terra::extract(substrate_longlat, pred_grid %>% dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
+# 
+# unique(pred_grid$substrate)
+# 
+# factor(sort(unique(round(pred_grid$substrate))))
+#  
+# pred_grid$substrate <- round(pred_grid$substrate)
+# 
+# pred_grid <- pred_grid %>% mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
+#                                   substrate = ifelse(substrate == 2, "hard-bottom complex", substrate),
+#                                   substrate = ifelse(substrate == 3, "sand", substrate),
+#                                   substrate = ifelse(substrate == 4, "hard clay", substrate),
+#                                   substrate = ifelse(substrate == 5, "mud", substrate))
+# 
+# # I. Bedrock.
+# # II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
+# # III. Sand including fine to coarse sand (with gravel exposures).
+# # IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
+# # V. Mud including gyttja-clay to gyttja-silt.
+# 
+# # Plot
+# ggplot(pred_grid, aes(X, Y, fill = substrate)) +
+#   geom_raster() +
+#   coord_sf()
 ```
 
 Add month_year variable for matching with raster layers
 
 ```{r merge quarters}
-pred_grid_1 <- pred_grid |> mutate(quarter = 1)
-pred_grid_4 <- pred_grid |> mutate(quarter = 4)
+pred_grid_1 <- pred_grid %>% mutate(quarter = 1)
+pred_grid_4 <- pred_grid %>% mutate(quarter = 4)
 
-dat <- bind_rows(pred_grid_1, pred_grid_4) |> 
+dat <- bind_rows(pred_grid_1, pred_grid_4) %>% 
   mutate(month = ifelse(quarter == 1, 2, 11), # most common months
          month_year = paste(month, year, sep = "_"))
 ```
@@ -593,13 +591,13 @@ big_dat_sal <- dplyr::bind_rows(sal_data_list)
 ```
 
 ```{r merge oxygen temp and salinity data with fish data}
-env_dat <- left_join(big_dat_oxy, big_dat_temp, by = c("month_year", "lon", "lat")) |> 
+env_dat <- left_join(big_dat_oxy, big_dat_temp, by = c("month_year", "lon", "lat")) %>% 
   left_join(big_dat_sal, by = c("month_year", "lon", "lat"))
 
 # Now join these data with the full_dat
 dat_full <- left_join(dat, env_dat, by = c("month_year", "lon", "lat"))
 
-ggplot(dat_full |> filter(quarter == 1), aes(X, Y, color = oxy)) + 
+ggplot(dat_full %>% filter(quarter == 1), aes(X, Y, color = oxy)) + 
   geom_point() + 
   facet_wrap(~year)
 ```
@@ -620,7 +618,7 @@ dat_full$subdiv <- over(pts, shape)$Area_27
 # Rename subdivisions to the more common names and do some more filtering (by sub div and area)
 sort(unique(dat_full$subdiv))
 
-dat_full <- dat_full |> 
+dat_full <- dat_full %>% 
   mutate(sub_div = factor(subdiv),
          sub_div = fct_recode(subdiv,
                               "24" = "3.d.24",
@@ -630,8 +628,8 @@ dat_full <- dat_full |>
                               "28" = "3.d.28.1",
                               "28" = "3.d.28.2",
                               "29" = "3.d.29"),
-         sub_div = as.character(sub_div)) |> 
-  filter(sub_div %in% c("24", "25", "26", "27", "28", 2)) |> 
+         sub_div = as.character(sub_div)) %>% 
+  filter(sub_div %in% c("24", "25", "26", "27", "28", 2)) %>% 
   filter(lat > 54 & lat < 59 & lon < 22)
 
 # Add ICES rectangles
@@ -641,15 +639,15 @@ plot_map +
   geom_raster(data = filter(dat_full, year == 1999), aes(X*1000, Y*1000, fill = oxy)) +
   facet_wrap(~sub_div)
 
-dat_full <- dat_full |> dplyr::select(-subdiv)
+dat_full <- dat_full %>% dplyr::select(-subdiv)
 ```
 
 ## Save
 
 ```{r save}
 # Remove variables and save
-pred_grid_93_06 <- dat_full |> filter(year < 2007)
-pred_grid_07_19 <- dat_full |> filter(year > 2006)
+pred_grid_93_06 <- dat_full %>% filter(year < 2007)
+pred_grid_07_19 <- dat_full %>% filter(year > 2006)
 
 write_csv(pred_grid_93_06, file = paste0(home, "/data/clean/pred_grid_(1_2).csv"))
 write_csv(pred_grid_07_19, file = paste0(home, "/data/clean/pred_grid_(2_2).csv"))
@@ -747,7 +745,7 @@ str(dlist)
 # Create data holding object
 oxy_data_list <- list()
 
-dat_old <- dat |> filter(!month_year %in% c("11_2020", "2_2021", "11_2021"))
+dat_old <- dat %>% filter(!month_year %in% c("11_2020", "2_2021", "11_2021"))
 
 # Loop through each month_year and extract raster values for the cpue data points
 for(i in unique(dat_old$month_year)) { # We can use q1 as looping index, doesn't matter!
@@ -803,17 +801,17 @@ for(i in unique(dat_old$month_year)) { # We can use q1 as looping index, doesn't
 big_dat_oxy <- dplyr::bind_rows(oxy_data_list)
 
 # Merge oxygen temp and salinity data with fish data}
-big_dat_oxy <- big_dat_oxy |> rename(oxy_old = oxy)
+big_dat_oxy <- big_dat_oxy %>% rename(oxy_old = oxy)
 
 dat_full2 <- left_join(dat_full, big_dat_oxy, by = c("month_year", "lon", "lat"))
 
-ggplot(dat_full2 |> filter(year == 2000), aes(oxy, oxy_old)) + 
+ggplot(dat_full2 %>% filter(year == 2000), aes(oxy, oxy_old)) + 
   geom_point() + 
   geom_abline(color = "red")
 
 min(dat_full2$oxy_old, na.rm = TRUE)
 min(dat_full2$oxy, na.rm = TRUE)
-dat_full2 |> arrange(oxy)
+dat_full2 %>% arrange(oxy)
 hist(dat_full2$oxy_old)
 hist(dat_full2$oxy)
 
@@ -821,29 +819,29 @@ ggplot(dat_full2, aes(oxy, oxy_old)) +
   geom_point(alpha = 0.1) + 
   facet_wrap(~year)
 
-cordf <- dat_full2 |> drop_na(oxy, oxy_old)
+cordf <- dat_full2 %>% drop_na(oxy, oxy_old)
 
 cor(cordf$oxy_old, cordf$oxy)
 
-dat_full2 |> 
-  mutate(diff = oxy - oxy_old) |> 
+dat_full2 %>% 
+  mutate(diff = oxy - oxy_old) %>% 
   ggplot(aes(X, Y, fill = diff)) + 
   facet_wrap(~year) + 
   geom_raster() + 
   scale_fill_gradient2()
 
 
-dat_full2 |> 
-  mutate(diff = oxy - oxy_old) |> 
-  mutate(diff = ifelse(diff < 5, diff, NA)) |> 
+dat_full2 %>% 
+  mutate(diff = oxy - oxy_old) %>% 
+  mutate(diff = ifelse(diff < 5, diff, NA)) %>% 
   ggplot(aes(X, Y, fill = diff)) + 
   facet_wrap(~year) + 
   geom_raster() + 
   scale_fill_gradient2()
 
-dat_full2 |> 
-  mutate(diff = oxy - oxy_old) |> 
-  mutate(diff = ifelse(diff < 5, diff, NA)) |> 
+dat_full2 %>% 
+  mutate(diff = oxy - oxy_old) %>% 
+  mutate(diff = ifelse(diff < 5, diff, NA)) %>% 
   ggplot(aes(depth, diff)) + 
   geom_point(alpha = 0.1) +
   labs(y = "oxy - oxy_old")
@@ -928,7 +926,7 @@ str(dlist)
 # Create data holding object
 temp_data_list <- list()
 
-dat_old <- dat |> filter(!month_year %in% c("11_2020", "2_2021", "11_2021"))
+dat_old <- dat %>% filter(!month_year %in% c("11_2020", "2_2021", "11_2021"))
 
 # Loop through each month_year and extract raster values for the cpue data points
 for(i in unique(dat_old$month_year)) { # We can use q1 as looping index, doesn't matter!
@@ -976,11 +974,11 @@ for(i in unique(dat_old$month_year)) { # We can use q1 as looping index, doesn't
 big_dat_temp <- dplyr::bind_rows(temp_data_list)
 
 # Merge oxygen temp and salinity data with fish data}
-big_dat_temp <- big_dat_temp |> rename(temp_old = temp)
+big_dat_temp <- big_dat_temp %>% rename(temp_old = temp)
 
 dat_full2 <- left_join(dat_full, big_dat_temp, by = c("month_year", "lon", "lat"))
 
-ggplot(dat_full2 |> filter(year == 2000), aes(temp, temp_old)) + 
+ggplot(dat_full2 %>% filter(year == 2000), aes(temp, temp_old)) + 
   geom_point() + 
   geom_abline(color = "red")
 

@@ -1,0 +1,301 @@
+---
+title: "Plot spatial variables for random forest models"
+author: "Max Lindmark"
+date: today
+date-format: iso
+toc: true
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 100%
+editor: source
+---
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "viridis", "RColorBrewer",
+          "patchwork", "concaveman") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Source code for map plots
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Load data
+
+```{r}
+d <- read_csv(paste0(home, "/output/rf_dat.csv"))
+```
+
+## Plot environmental variables!
+
+```{r}
+# Because they are on different scales, I'll build the plot using patchwork instead of e.g. pivot longer
+# First row, temperature
+p1 <- plot_map_labels_fc + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = mean_temp), alpha = 0.9) +
+  scale_fill_viridis(option = "magma", name = "Mean °C") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) +
+  ggtitle("Mean temperature") +
+  geom_sf() + 
+  annotate("text", label = "Sweden", x = xmin2 + 0.28*xrange, y = ymin2 + 0.75*yrange, color = "gray50", size = 1.9) +
+  annotate("text", label = "Denmark", x = xmin2 + 0.012*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.9, angle = 75) +
+  annotate("text", label = "Germany", x = xmin2 + 0.07*xrange, y = ymin2 + 0.02*yrange, color = "gray50", size = 1.9) +
+  annotate("text", label = "Poland", x = xmin2 + 0.58*xrange, y = ymin2 + 0.02*yrange, color = "gray50", size = 1.9) +
+  annotate("text", label = "Russia", x = xmin2 + 0.95*xrange, y = ymin2 + 0.18*yrange, color = "gray50", size = 1.9) +
+  annotate("text", label = "Lithuania", x = xmin2 + 1*xrange, y = ymin2 + 0.43*yrange, color = "gray50", size = 1.9, angle = 75) +
+  annotate("text", label = "Latvia", x = xmin2 + 0.99*xrange, y = ymin2 + 0.65*yrange, color = "gray50", size = 1.9, angle = 75)
+
+p2 <- plot_map_fc + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = temp_slope), alpha = 0.9) +
+  scale_fill_gradient2(name = "°C×year<sup>-1</sup>",
+                       high = "tomato3",
+                       low = "blue") + 
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) +
+  ggtitle("Temperature trend") +
+  geom_sf()
+
+p3 <- plot_map_fc + 
+  geom_raster(data = d, aes(X*1000, Y*1000, fill = mean_oxy), alpha = 0.9) +
+  scale_fill_viridis(option = "mako", name = "Mean O<sub>2</sub>") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Mean dissolved oxygen") +
+  geom_sf()
+
+#(p1 + p2 + p3)
+#ggsave(paste0(home, "/figures/env_vars_space.pdf"), width = 17, height = 6, units = "cm", device = cairo_pdf)
+#pp <- (p1 + p2 + p3)
+```
+
+## Now do biotic variables... add here the boundary!
+
+```{r}
+# Read the biotic trends and velocities
+trend <- d %>%
+  filter(cumulative == "Y") %>% 
+  mutate(id = paste(X, Y, group, sep = "_"))
+
+# Read the prediction grid and join all grid cells so that I can color the filtered cells as NA
+full_grid <- crossing(d %>% dplyr::select(X, Y),
+                      group = unique(trend$group)) %>%
+  mutate(id = paste(X, Y, group, sep = "_"))
+
+full_grid_trends <- full_grid %>%
+  filter(!id %in% unique(trend$id)) %>% 
+  mutate(mean_biom = NA, 
+         biom_trend = NA)
+
+# ggplot(full_grid_trends, aes(X, Y)) +
+#   geom_point(size = 0.1) + 
+#   facet_wrap(~group) + 
+#   coord_sf()
+  
+trend <- bind_rows(trend, full_grid_trends)
+
+# Because we trim the grids, let's add a polygon that is the overall outside border.
+border_df <- trend
+z <- concaveman(cbind(border_df$X, border_df$Y), concavity = 2)
+plot(z)
+z_poly <- sp::SpatialPolygons(list(sp::Polygons(list(sp::Polygon(z)), ID = 1)))
+domain <- as.data.frame(z_poly@polygons[[1]]@Polygons[[1]]@coords)
+colnames(domain) <- c("X", "Y")
+
+ggplot(domain, aes(x = X, y = Y)) +
+  geom_polygon(fill = NA, color = "tomato")
+
+# First row!
+p4 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "cod_adult"),
+              aes(X*1000, Y*1000, fill = mean_biom), alpha = 0.9) +
+  scale_fill_viridis(option = "viridis", name = "log(kg×km<sup>-2</sup>)", na.value="grey94") +
+  labs(x = "") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Mean adult cod biomass") +
+  geom_sf() + 
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+p5 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "flounder_adult"),
+              aes(X*1000, Y*1000, fill = mean_biom), alpha = 0.9) +
+  scale_fill_viridis(option = "viridis", name = "log(kg×km<sup>-2</sup>)", na.value="grey94") +
+  labs(y = "", x = "") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Mean adult flounder biomass") +
+  geom_sf() +
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+p6 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "plaice_adult"),
+              aes(X*1000, Y*1000, fill = mean_biom), alpha = 0.9) +
+  scale_fill_viridis(option = "viridis", name = "log(kg×km<sup>-2</sup>)", na.value="grey94") +
+  labs(y = "", x = "") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.19, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Mean adult plaice biomass") +
+  geom_sf() +
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+# Second row! (trends)
+p7 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "cod_adult"),
+              aes(X*1000, Y*1000, fill = biom_trend), alpha = 0.9) +
+  scale_fill_gradient2(name = "kg×km<sup>-2</sup>×year<sup>-1</sup>", na.value="grey94") + 
+  theme_sleek(base_size = 8) +
+  labs(x = "") +
+  theme(legend.position = c(0.24, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Adult cod biomass trends") +
+  geom_sf() +
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+p8 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "flounder_adult"),
+              aes(X*1000, Y*1000, fill = biom_trend), alpha = 0.9) +
+  scale_fill_gradient2(name = "kg×km<sup>-2</sup>×year<sup>-1</sup>", na.value="grey94") + 
+  labs(y = "") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.24, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Adult flounder biomass trends") +
+  geom_sf() +
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+p9 <- plot_map_fc + 
+  geom_raster(data = trend %>% filter(group == "plaice_adult"),
+              aes(X*1000, Y*1000, fill = biom_trend), alpha = 0.9) +
+  scale_fill_gradient2(name = "kg×km<sup>-2</sup>×year<sup>-1</sup>", na.value="grey94") + 
+  labs(y = "", x = "") +
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.24, 0.81),
+        legend.key.height = unit(0.4, "line"),
+        legend.key.width = unit(0.2, "line"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.title = ggtext::element_markdown(size = 6),
+        plot.title = element_text(size = 7)) + 
+  ggtitle("Adult plaice biomass trends") +
+  geom_sf() +
+  geom_polygon(data = domain, aes(X*1000, Y*1000),
+               fill = NA, color = "red", linewidth = 0.2)
+
+(p1 + p2 + p3) / (p4 + p5 + p6) + (p7 + p8 + p9)#+ plot_annotation(tag_levels = "A")
+
+ggsave(paste0(home, "/figures/adu_bio_vars_space.pdf"), width = 17, height = 17,
+       units = "cm", device = cairo_pdf)
+```
+

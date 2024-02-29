@@ -1,0 +1,428 @@
+---
+title: "Prepare spatial trend predictions"
+author: "Max Lindmark"
+date: today
+date-format: iso
+toc: true
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 100%
+editor: source
+---
+
+## Intro
+
+Prepare spatial trend predictions: calculate velocities, add in temperature trends etc.
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "modelr",
+          "viridis", "RColorBrewer", "raster") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Source code for map plots
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# VoCC
+# See this: https://github.com/cbrown5/vocc
+#devtools::install_github("seananderson/vocc")
+library(vocc)
+
+# Set path
+home <- here::here()
+```
+
+## Load data
+
+```{r}
+d <- read_csv(paste0(home, "/output/pred_grids_04_random_sdms.csv"))
+
+# TODO: check this is correct; because this is the delta_gamma poisson link I *think* we can just add the fields like this
+d <- d %>%
+  mutate(zeta_s_year_sc = zeta_s_year_sc1 + zeta_s_year_sc2) # Note the field is in log-space
+
+# p <- d %>%
+#   mutate(id_env = paste(X, Y, group, sep = "-"),
+#          est = exp(est1 + est2)) %>%
+#   split(.$id_env) %>%
+#   purrr::map(~lm(est ~ year, data = .x)) %>%
+#   purrr::map_df(broom::tidy, .id = 'id_env') %>%
+#   filter(term == 'year') %>% 
+#   dplyr::select(id_env, estimate) %>% 
+#   rename(temp_slope = estimate) %>% 
+#   separate_wider_delim(id_env, delim = "-", names = c("X", "Y", "group")) %>% 
+#   mutate(X = as.numeric(X), Y = as.numeric(Y))
+# 
+# ggplot(p %>% filter(temp_slope > -30 & temp_slope < 30), aes(X, Y, fill = temp_slope)) +
+#   geom_raster() +
+#   facet_wrap(~group) +
+#   scale_fill_gradient2() + 
+#   coord_sf()
+# 
+# ggplot(d, aes(X, Y, fill = zeta_s_year_sc)) +
+#   geom_raster() +
+#   facet_wrap(~group) +
+#   scale_fill_gradient2() +
+#   coord_sf()
+
+# Read the prediction grid for calculating environmental trends
+# For that I also need the data so that I can scale properly
+dat <- readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
+  rename(X = x, Y = y) %>%
+  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
+                 flounder_juvenile, plaice_adult, plaice_juvenile),
+               names_to = "group", values_to = "density") %>% 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
+  drop_na(depth, temp, oxy, sal, density)
+
+dat <- dat %>% filter(!species == "dab")
+dat <- dat %>% 
+  mutate(temp_sc = as.vector(scale(temp)),
+         temp_sq = temp_sc^2,
+         oxy_sc = as.vector(scale(oxy)),
+         oxy_sq = oxy_sc^2,
+         sal_sc = as.vector(scale(sal)),
+         depth_sc = as.vector(scale(depth)),
+         depth_sq = depth_sc*depth_sc,
+         quarter_f = as.factor(quarter),
+         year_f = as.factor(year),
+         year_ct = year - mean(year),
+         year_sc = (year - mean(year)) / sd(year)) %>% 
+  filter(quarter == 4)
+
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
+
+# Scale variables with respect to data, not the prediction grid!
+pred_grid <- pred_grid %>% 
+  drop_na(depth, temp, oxy, sal) %>% 
+  mutate(temp_sc = (temp - mean(dat$temp)) / sd(dat$temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = (oxy - mean(dat$oxy)) / sd(dat$oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = (sal - mean(dat$sal)) / sd(dat$sal),
+         depth_sc = (depth - mean(dat$depth)) / sd(dat$depth),
+         depth_sq = depth_sc*depth_sc,
+         year_ct = year - mean(dat$year),
+         year_sc = (year - mean(dat$year)) / sd(dat$year)) %>% 
+  filter(quarter == 4)
+```
+
+## Calculate cumulative biomass density to get core distribution area by species
+
+```{r}
+trends <- d %>%
+  filter(year == 2000) # zeta is the same across all years
+
+ggplot(trends, aes(zeta_s_year_sc)) + 
+  geom_histogram() + 
+  facet_wrap(~group)
+
+list_cumsum <- list()
+
+for(i in unique(trends$group)) { 
+  
+  list_cumsum[[i]] <- trends %>%
+    #t <- trends %>%
+    filter(group == i) %>%
+    mutate(id = paste(X, Y, group, sep = "_")) %>% 
+    group_by(id) %>% 
+    summarise(grid_mean = median(exp(est1 + est2))) %>% # note the delta_gamma poisson link!
+    ungroup() %>% 
+    arrange(desc(grid_mean)) %>% 
+    mutate(cumsum = cumsum(grid_mean),
+           sum = sum(grid_mean),
+           perc = cumsum / sum,
+           # rather arbitrary percentile but still
+           cumulative = ifelse(perc < 0.99, "Y", "N")) %>%
+    dplyr::select(id, cumulative, grid_mean, cumsum, sum, perc)
+  
+}
+
+d_cumulative <- bind_rows(list_cumsum)
+
+# Join back to the data frame
+trends <- trends %>% 
+  mutate(id = paste(X, Y, group, sep = "_")) %>% 
+  left_join(d_cumulative, by = "id")
+
+# Plot core habitat on map by group
+plot_map + 
+  geom_raster(data = trends, aes(X*1000, Y*1000, fill = cumulative)) +
+  facet_wrap(~group)
+
+# Plot trends in core habitat
+plot_map + 
+  geom_raster(data = trends %>% filter(cumulative == "Y"),
+              aes(X*1000, Y*1000, fill = zeta_s_year_sc)) +
+  facet_wrap(~group) + 
+  scale_fill_gradient2()
+
+# Plot histogram of trends per group
+trends %>%
+  filter(cumulative == "Y") %>% 
+  ggplot(aes(zeta_s_year_sc)) + 
+  geom_histogram() + 
+  facet_wrap(~group) + 
+  geom_vline(xintercept = 0)
+```
+
+Calculate environmental trends
+
+```{r calculate predictors}
+# First calculate the year slopes of temperature
+temp_yr_slopes <- pred_grid %>%
+  mutate(id_env = paste(X, Y, sep = "_")) %>%
+  split(.$id_env) %>%
+  purrr::map(~lm(temp ~ year, data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'id_env') %>%
+  filter(term == 'year') %>% 
+  dplyr::select(id_env, estimate) %>% 
+  rename(temp_slope = estimate)
+
+oxy_yr_slopes <- pred_grid %>%
+  mutate(id_env = paste(X, Y, sep = "_")) %>%
+  split(.$id_env) %>%
+  purrr::map(~lm(oxy ~ year, data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'id_env') %>%
+  filter(term == 'year') %>% 
+  dplyr::select(id_env, estimate) %>% 
+  rename(oxy_slope = estimate)
+
+# Calculate temperature and oxygen means per grid cell
+temp_means <- pred_grid %>% 
+  mutate(id_env = paste(X, Y, sep = "_")) %>% 
+  group_by(id_env) %>% 
+  summarise(mean_temp = mean(temp)) %>% 
+  ungroup()
+
+oxy_means <- pred_grid %>% 
+  mutate(id_env = paste(X, Y, sep = "_")) %>% 
+  group_by(id_env) %>% 
+  summarise(mean_oxy = mean(oxy)) %>% 
+  ungroup()
+
+# Biomass means! Here we switch from pred_grid to the predicted density. Note also this needs to be group-specific
+bio_means <- trends %>%
+  mutate(id_env = paste(X, Y, sep = "_")) %>% 
+  group_by(id_env, group) %>% 
+  # log-scale biomass
+  summarise(mean_biom = mean(est1 + est2)) %>% # biomass is given by exp(est1 + est2)
+  ungroup()
+```
+
+Calculate temperature and oxygen velocities
+
+```{r}
+sst <- pred_grid %>% 
+  group_split(year) %>% 
+  map(~rasterFromXYZ(.x[,c("X", "Y", "temp")])) %>% 
+  brick()
+
+slopedat <- calcslope(sst)
+allyears <- rep(1, raster::nlayers(sst))
+# Must use y_dist = res(rx) if data is in UTMs or other true distance grid
+mnsst <- raster::stackApply(sst, indices = allyears, fun = mean)
+spatx <- spatialgrad(mnsst, y_dist = raster::res(sst), y_diff = NA)
+velo_sst <- calcvelocity(spatx, slopedat, y_dist = 1)
+
+velo_sst <- velo_sst %>%
+  drop_na(velocity) %>% 
+  filter(velocity < quantile(velocity, probs = 0.99),
+         velocity > quantile(velocity, probs = 0.01))
+
+ggplot(velo_sst,
+       aes(x, y, fill = velocity)) + 
+  geom_raster() + 
+  scale_fill_gradient2() + 
+  coord_sf()
+
+# Trim data before joining
+velo_sst <- velo_sst %>%
+  mutate(id_env = paste(x, y, sep = "_")) %>%
+  dplyr::select(velocity, id_env) %>% 
+  rename(temp_vel = velocity)
+
+
+
+# Same for oxygen
+oxy <- pred_grid %>% 
+  group_split(year) %>% 
+  map(~rasterFromXYZ(.x[,c("X", "Y", "oxy")])) %>% 
+  brick() # Chris Browns package needs brick() not stack()
+
+slopedat <- calcslope(oxy)
+# Compare slopes from just straight up calculation
+# ggplot(slopedat %>% drop_na(),
+#        aes(x, y, fill = slope)) + 
+#   geom_raster() + 
+#   scale_fill_gradient2() +
+#   coord_sf()
+
+allyears <- rep(1, raster::nlayers(oxy))
+mnsst <- raster::stackApply(oxy, indices = allyears, fun = mean)
+spatx <- spatialgrad(mnsst, y_dist = raster::res(oxy), y_diff = NA)
+velo_oxy <- calcvelocity(spatx, slopedat, y_dist = 1)
+
+velo_oxy <- velo_oxy %>%
+  drop_na(velocity) %>% 
+  filter(velocity < quantile(velocity, probs = 0.99)) %>% 
+  filter(velocity > quantile(velocity, probs = 0.01))
+
+ggplot(velo_oxy, aes(x, y, fill = velocity)) + 
+  geom_raster() + 
+  scale_fill_gradient2() +
+  coord_sf()
+
+# Trim data before joining
+velo_oxy <- velo_oxy %>%
+  mutate(id_env = paste(x, y, sep = "_")) %>% 
+  dplyr::select(velocity, id_env) %>% 
+  rename(oxy_vel = velocity)
+
+
+
+# Biomass-velocities?!
+# Needs to be done by species....
+biom_velo_list <- list()
+
+for(i in unique(d$group)) {
+  
+  # Use trends data!
+  # Option 1: calculate trends on predictions
+  biom <- d %>% # not pred grid, not trends but d, which contains all years
+    filter(group == i) %>% 
+    mutate(est = exp(est1 + est2)) %>% 
+    group_split(year) %>% 
+    map(~rasterFromXYZ(.x[,c("X", "Y", "est")])) %>% # TODO: in theory we can use the biomass slope
+    brick()
+
+  slopedat <- calcslope(biom)
+  # Compare slopes from just straight up calculation
+  # print(ggplot(slopedat %>% drop_na(),
+  #        aes(x, y, fill = slope)) +
+  #   geom_raster() +
+  #   scale_fill_gradient2() +
+  #   coord_sf())
+  
+  # Option 2: use the spatial trends as the trends... 
+  # slopedat <- slopedat %>% 
+  #   left_join(d %>% 
+  #               filter(year == 2000) %>% # zeta is repeated each year
+  #               filter(group == i) %>% 
+  #               dplyr::select(zeta_s_year_sc, X, Y) %>% 
+  #               rename(x = X, y = Y) %>% 
+  #               mutate(zeta_s_year_sc = exp(zeta_s_year_sc)),
+  #             by = c("x", "y")
+  #             )
+  # slopedat %>%
+  #   drop_na() %>%
+  #   pivot_longer(c("zeta_s_year_sc", "slope")) %>%
+  #   ggplot(aes(x, y, fill = value)) +
+  #   geom_raster() +
+  #   scale_fill_gradient2() +
+  #   coord_sf() +
+  #   facet_wrap(~name)
+  # 
+  # slopedat <- slopedat %>% 
+  #   dplyr::select(-slope) %>% 
+  #   rename(slope = zeta_s_year_sc)
+  
+  allyears <- rep(1, raster::nlayers(biom))
+  mnsst <- raster::stackApply(biom, indices = allyears, fun = mean)
+  spatx <- spatialgrad(mnsst, y_dist = raster::res(biom), y_diff = NA)
+  velo_biom <- calcvelocity(spatx, slopedat, y_dist = 1)
+  
+  velo_biom <- velo_biom %>%
+    drop_na(velocity) %>% 
+    filter(velocity < quantile(velocity, probs = 0.95)) %>% 
+    filter(velocity > quantile(velocity, probs = 0.05))
+  
+  print(ggplot(velo_biom, aes(x, y, fill = velocity)) + 
+    geom_raster() + 
+    scale_fill_gradient2() +
+    coord_sf())
+  
+  velo_biom <- velo_biom %>%
+    mutate(id_env = paste(x, y, sep = "_")) %>%
+    dplyr::select(velocity, id_env) %>% 
+    rename(biom_vel = velocity) %>% 
+    mutate(group = i)
+  
+  biom_velo_list[[i]] <- velo_biom
+  
+}
+
+biom_df <- bind_rows(biom_velo_list)
+
+biom_df %>%
+  separate_wider_delim(id_env, "_", names = c("X", "Y")) %>%
+  mutate(X = as.numeric(X)*1000,
+         Y = as.numeric(Y)*1000) %>%
+  ggplot(aes(X, Y, fill = biom_vel)) +
+  geom_raster() +
+  facet_wrap(~group) +
+  scale_fill_gradient2() +
+  coord_sf()
+
+ggplot(biom_df, aes(biom_vel)) +
+  geom_histogram() +
+  facet_wrap(~group)
+```
+
+Join environmental trends and velocities to trends data
+
+```{r}
+trends <- trends %>% 
+  mutate(id_env = paste(X, Y, sep = "_")) %>%
+  left_join(temp_yr_slopes, by = "id_env") %>% 
+  left_join(oxy_yr_slopes, by = "id_env") %>% 
+  left_join(temp_means, by = "id_env") %>% 
+  left_join(oxy_means, by = "id_env") %>% 
+  left_join(velo_sst, by = "id_env") %>% 
+  left_join(velo_oxy, by = "id_env") %>% 
+  left_join(bio_means, by = c("id_env", "group")) %>% 
+  left_join(biom_df, by = c("id_env", "group"))
+
+# Scale variables
+trends <- trends %>% 
+  mutate(mean_temp_ct = mean_temp - mean(mean_temp),
+         mean_oxy_ct = mean_oxy - mean(mean_oxy),
+         temp_slope_sc = (temp_slope - mean(temp_slope)) / sd(temp_slope),
+         oxy_slope_sc = (oxy_slope - mean(oxy_slope)) / sd(oxy_slope),
+         temp_vel_sc = (temp_vel - mean(temp_vel, na.rm = TRUE)) / sd(temp_vel, na.rm = TRUE),
+         oxy_vel_sc = (oxy_vel - mean(oxy_vel, na.rm = TRUE)) / sd(oxy_vel, na.rm = TRUE)) %>% 
+  mutate(mean_biom_ct = mean_biom - mean(mean_biom), .by = "group") %>% 
+  rename(biom_trend = zeta_s_year_sc)
+
+# Trim the data a bit... 
+trends <- trends %>% 
+  dplyr::select(X, Y, 
+                temp_slope, temp_slope_sc, mean_temp, mean_temp_ct, temp_vel, temp_vel_sc,
+                oxy_slope, oxy_slope_sc, mean_oxy, mean_oxy_ct, oxy_vel, oxy_vel_sc,
+                mean_biom, mean_biom_ct,
+                lon, lat, group, biom_trend, biom_vel, cumulative)
+```
+
+```{r}
+write_csv(trends, paste0(home, "/output/rf_dat.csv"))
+```
+

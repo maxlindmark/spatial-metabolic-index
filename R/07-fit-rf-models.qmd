@@ -1,0 +1,501 @@
+---
+title: "Fit random forest models to spatial biomass trends and velocities"
+author: "Max Lindmark"
+date: today
+date-format: iso
+toc: true
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 100%
+editor: source
+---
+
+## Intro
+
+Fit random forest models to biomass trends and velocities from sdms random fields. We'll use a `tidymodels` pipeline, consisting of `rsample` for sample splitting (e.g. train/test or cross-validation), `recipes` for pre-processing, `parsnip` for specifying the model and `yardstick` for evaluating the model.
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: false
+#| warning: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "tidymodels", "RCurl", "devtools", "vip",
+          "viridis", "RColorBrewer", "ranger", "patchwork") 
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# Source code for map plots
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+```
+
+## Load data
+
+```{r}
+d <- read_csv(paste0(home, "/output/rf_dat.csv")) %>% 
+  filter(cumulative == "Y")
+
+ggplot(d, aes(biom_trend)) + 
+  geom_histogram() + 
+  facet_wrap(~group)
+```
+
+
+```{r}
+#| include: false
+# Some resources
+# https://brunaw.com/slides/rladies-dublin/RF/intro-to-rf.html#27
+# https://www.rebeccabarter.com/blog/2020-03-25_machine_learning#what-is-tidymodels
+# https://juliasilge.com/blog/ikea-prices/
+# https://juliasilge.com/blog/sf-trees-random-tuning/
+# https://www.tidymodels.org/start/tuning/
+# https://workflows.tidymodels.org/reference/predict-workflow.html
+# https://christophm.github.io/interpretable-ml-book/feature-importance.html 
+```
+
+## Biomass trends with trends-covariates
+First we split the data into training and testing (for evaluating the final model's performance after tuning hyper-parameters using cross validation)
+
+```{r split trend}
+trend <- d %>%
+  dplyr::select(biom_trend, temp_slope_sc, mean_temp_ct, mean_oxy_ct, group)
+
+trend_split <- initial_split(trend, prop = 3/4)
+trend_split
+
+# Extract training and testing sets
+trend_train <- training(trend_split)
+trend_test <- testing(trend_split)
+```
+
+We need to tune the model by comparing the predictive performance of hyper parameters using cross validation, so set up a cross-validation object.
+
+```{r cv trend}
+# Create CV object from training data
+trend_cv <- vfold_cv(trend_train)
+```
+
+Now define the "recipe", basically the formula because we have already pre-processed the data
+
+```{r recipe trend}
+# Define the recipe, note the variables are already scaled
+trend_recipe <- 
+  recipe(biom_trend ~ temp_slope_sc + mean_temp_ct + mean_oxy_ct + group, # TODO: skip biomass?
+         data = trend)
+
+trend_recipe
+```
+
+Next step is to pre-specify the model using `parsnip` It's basically a "universal" way to specify a model by defining the model type, arguments (such as which hyper parameters to tune), engine. We tune mtry (number of predictors that are sampled at splits in a tree-based model node) and trees (how many models to average predictions over)
+
+```{r specify trend model}
+rf_trend_model <- 
+  # specify that the model is a random forest
+  rand_forest() %>%
+  # specify what hyperparameters to tune
+  set_args(mtry = tune(),
+           trees = tune()) %>%
+  # select the engine/package that underlies the model
+  set_engine("ranger", importance = "permutation", keep.inbag = TRUE) %>% # keep.inbag is to get CI's later!
+  set_mode("regression")
+
+rf_trend_model
+```
+
+Put the model and recipes together into a workflow. You initiate a workflow using `workflow()`, and then you can add a recipe and add a model to it.
+
+```{r workflow trend}
+# Set the workflow
+rf_trend_workflow <- workflow() %>%
+  add_recipe(trend_recipe) %>%
+  add_model(rf_trend_model)
+
+rf_trend_workflow
+```
+
+Tune hyper parameters by checking model performance using cross validation
+
+```{r tune trend hypers}
+# Default mtry is the (rounded down) square root of the number variables and tree is 500. Specify which values want to try in a grid
+rf_trend_grid <- expand.grid(mtry = c(2, 3, 4),
+                             trees = seq(100, 1000, by = 200))
+
+# Extract results of tuning (metric is rmse)
+rf_trend_tune_results <- rf_trend_workflow %>%
+  tune_grid(resamples = trend_cv, # CV object
+            grid = rf_trend_grid, # grid of values to try
+            metrics = yardstick::metric_set(rmse))
+
+# Print results
+rf_trend_tune_results %>%
+  collect_metrics()
+
+# Plot results
+autoplot(rf_trend_tune_results) + 
+  scale_color_brewer(palette = "Set1") + 
+  theme(legend.position = "bottom")
+# Seems mtry = 3 is the best (just)
+
+ggsave(paste0(home, "/figures/supp/hyper_tuning.pdf"), width = 11, height = 11, units = "cm")
+```
+
+Now update the workflow to get the best mtry and n trees from the tuning
+
+```{r update trend workflow with tuned hyper parameters}
+param_trend_final <- rf_trend_tune_results %>%
+  select_best(metric = "rmse")
+
+param_trend_final
+
+# Add this parameter to the workflow using the finalize_workflow() function.
+rf_trend_workflow <- rf_trend_workflow %>%
+  finalize_workflow(param_trend_final) # can do the select best in here as well
+
+rf_trend_workflow
+```
+
+Now we’ve defined our recipe, our model, and tuned the model’s parameters, we can fit the final model. Applying the `last_fit()` function to our workflow and our train/test split object will train the model specified by the workflow using the training data, and produce evaluations based on the test set.
+
+```{r fit trend}
+rf_trend_fit <- rf_trend_workflow %>%
+  last_fit(trend_split)
+```
+
+Evaluate the model performance on the testing data
+
+```{r evaluate trend performance}
+rf_trend_fit %>% collect_metrics()
+
+# Check predicted vs observed, note this is for the testing data!
+collect_predictions(rf_trend_fit) %>%
+  ggplot(aes(biom_trend, .pred)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_abline(linetype = 2, color = "tomato3") +
+  coord_fixed()
+```
+
+Now that we have a final model we want to train it on the full dataset, and then use it to predict the response for new data. For that we need to `fit()` again on the full dataset (the complete training + testing dataset).
+
+```{r trend final model}
+final_trend_model <- fit(rf_trend_workflow, trend)
+
+final_trend_model
+```
+
+Look at variable importance
+
+```{r trend vip}
+p <- 
+  # workflow() %>%
+  # add_recipe(trend_recipe) %>%
+  # add_model(rf_trend_model) %>%
+  # fit(trend) %>% # TODO: or trend_train?
+  final_trend_model %>% 
+  pull_workflow_fit() %>%
+  vip(aesthetics = list(alpha = 0.8, fill = "steelblue"))
+
+p
+
+# For a tailor made plot we can also extract the VIPs
+trend_ranger_obj <- pull_workflow_fit(final_trend_model)$fit
+trend_ranger_obj$variable.importance
+
+vip_tib_trend <- 
+  tibble(Importance = trend_ranger_obj$variable.importance,
+         var = as.factor(names(trend_ranger_obj$variable.importance))) %>% 
+  mutate(var2 = recode(var, 
+                       "temp_slope_sc" = "Temperature slope",
+                       "mean_temp_ct" = "Mean temperature",
+                       "mean_oxy_ct" = "Mean oxygen",
+                       "group" = "Group"),
+         response = "Trend")
+  
+vip_trend <- ggplot(vip_tib_trend, aes(Importance, reorder(var2, Importance))) + 
+  geom_point() + 
+  geom_segment(aes(x = 0, xend = Importance,
+                   yend = as.numeric(reorder(var2, Importance)))) + 
+  labs(y = "")
+
+vip_trend
+
+ggsave(paste0(home, "/figures/supp/rf_vip.pdf"), width = 17, height = 8, units = "cm")
+```
+
+Predict on new data, calculate delta biomass slopes
+
+```{r trend predict}
+# Can we make the English plot?
+nd_delta <- tibble(expand.grid(
+  group = unique(trend$group),
+  temp_slope_sc = c(0, 1),
+  mean_temp_ct = as.numeric(quantile(trend$mean_temp_ct, probs = c(0.1, 0.9))),
+  mean_oxy_ct = as.numeric(quantile(trend$mean_oxy_ct, probs = c(0.1, 0.5,  0.9))))
+  ) %>% 
+  mutate(mean_biom_ct = 0,
+         mean_temp_ct2 = ifelse(mean_temp_ct == min(mean_temp_ct), "Cold", "Warm"),
+         mean_oxy_ct2 = ifelse(mean_oxy_ct == min(mean_oxy_ct), "Low oxygen", "median oxygen"),
+         mean_oxy_ct2 = ifelse(mean_oxy_ct == max(mean_oxy_ct), "High oxygen", mean_oxy_ct2)) %>% 
+  mutate(group2 = str_replace(group, "_", " "),
+         group2 = str_to_sentence(group2))
+
+nd_delta$pred <- predict(final_trend_model, new_data = nd_delta)$.pred
+
+# So, we don't have a ranger object but a workflow object... 
+# https://workflows.tidymodels.org/reference/predict-workflow.html
+# FIXME: I assume because this is a ranger model, the se.method = "infjack",
+pred_ci <- predict(final_trend_model, new_data = nd_delta, type = "conf_int", 
+                   level = 0.95)
+
+nd_delta <- nd_delta %>% bind_cols(pred_ci)
+
+nd_delta <- nd_delta %>%
+  pivot_wider(names_from = temp_slope_sc,
+              values_from = c("pred", ".pred_lower", ".pred_upper")) %>% 
+  mutate(delta_biomass = pred_1 - pred_0,
+         delta_biomass_lwr = .pred_lower_1 - .pred_lower_0,
+         delta_biomass_upr = .pred_upper_1 - .pred_upper_0)
+
+order <- nd_delta %>%
+  filter(mean_temp_ct2 == "Cold" & mean_oxy_ct2 == "median oxygen") %>%
+  arrange(desc(delta_biomass))
+
+ggplot(nd_delta %>% filter(!mean_oxy_ct2 == "median oxygen"),
+       aes(delta_biomass, factor(group2, levels = order$group2), group2,
+           color = factor(mean_temp_ct2, levels = c("Warm", "Cold")))) +
+  geom_point(position = position_dodge(width = 0.15)) + 
+  geom_errorbar(width = 0, aes(xmin = delta_biomass_lwr, xmax = delta_biomass_upr),
+                position = position_dodge(width = 0.15), alpha = 0.3) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.2) +
+  facet_wrap(~factor(mean_oxy_ct2, levels = c("Low oxygen", "High oxygen")),
+             ncol = 1) +
+  scale_color_manual(values = c("tomato3", "steelblue"), name = "") +
+  labs(y = "", x = "\u0394 biotic trend with a 1 st.dev\nincrease in temperature trend") +
+  theme(legend.position = "bottom")
+
+ggsave(paste0(home, "/figures/supp/temp_trend_delta_oxygen.pdf"), width = 11, height = 15, units = "cm", device = cairo_pdf)
+
+order <- nd_delta %>%
+  filter(mean_temp_ct2 == "Cold" & mean_oxy_ct2 == "median oxygen") %>%
+  arrange(delta_biomass)
+
+delta_trend <- ggplot(nd_delta %>% filter(mean_oxy_ct2 == "median oxygen"),
+       aes(delta_biomass, factor(group2, levels = order$group2),
+           color = factor(mean_temp_ct2, levels = c("Warm", "Cold")))) + 
+  geom_point(position = position_dodge(width = 0.15)) + 
+  geom_errorbar(width = 0, aes(xmin = delta_biomass_lwr, xmax = delta_biomass_upr),
+                position = position_dodge(width = 0.15), alpha = 0.3) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.2) +
+  scale_color_manual(values = c("tomato3", "steelblue"), name = "") + 
+  labs(y = "", x = "\u0394 biomass trend with a 1 st.dev\nincrease in temperature trend") + 
+  theme(legend.position = "bottom")
+
+delta_trend
+
+ggsave(paste0(home, "/figures/temp_trend_delta.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
+```
+
+```{r}
+knitr::knit_exit()
+```
+
+## Now do velocities in a more distinct way
+
+```{r split velo}
+velo <- d %>%
+  drop_na(temp_vel_sc) %>% # we have some NAs here
+  drop_na(biom_vel) %>% # we have some NAs here
+  dplyr::select(biom_vel, temp_vel_sc, mean_temp_ct, mean_oxy_ct, group)
+
+velo_split <- initial_split(velo, prop = 3/4)
+
+# Extract training and testing sets
+velo_train <- training(velo_split)
+velo_test <- testing(velo_split)
+
+# Create CV object from training data
+velo_cv <- vfold_cv(velo_train)
+
+# Define the recipe, note the variables are already scaled
+velo_recipe <- 
+  recipe(biom_vel ~ temp_vel_sc + mean_temp_ct + mean_oxy_ct + group, # TODO: skip biomass?
+         data = velo)
+
+rf_velo_model <- 
+  rand_forest() %>%
+  set_args(mtry = tune(),
+           trees = 500) %>% 
+  set_engine("ranger", importance = "permutation", keep.inbag = TRUE) %>% # keep.inbag is to get CI's later!
+  set_mode("regression")
+
+# Set the workflow
+rf_velo_workflow <- workflow() %>%
+  add_recipe(velo_recipe) %>%
+  add_model(rf_velo_model)
+
+# Default mtry is the (rounded down) square root of the number variables and tree is 500. Specify which values want to try in a grid
+rf_velo_grid <- expand.grid(mtry = c(3, 4, 5)
+                            #, trees = seq(100, 1000, by = 200)
+                            )
+
+# Extract results of tuning (metric is rmse)
+rf_velo_tune_results <- rf_velo_workflow %>%
+  tune_grid(resamples = velo_cv, 
+            grid = rf_velo_grid, 
+            metrics = yardstick::metric_set(rmse))
+
+# Print results
+rf_velo_tune_results %>%
+  collect_metrics()
+
+# Plot results
+autoplot(rf_velo_tune_results)
+
+param_velo_final <- rf_velo_tune_results %>%
+  select_best(metric = "rmse")
+
+# Add this parameter to the workflow using the finalize_workflow() function.
+rf_velo_workflow <- rf_velo_workflow %>%
+  finalize_workflow(param_velo_final)
+
+rf_velo_fit <- rf_velo_workflow %>%
+  last_fit(velo_split)
+```
+
+Evaluate the model performance on the testing data
+
+```{r evaluate velo performance}
+rf_velo_fit %>% collect_metrics()
+
+# Check predicted vs observed, note this is for the testing data!
+collect_predictions(rf_velo_fit) %>%
+  ggplot(aes(biom_vel, .pred)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_abline(linetype = 2, color = "tomato3") +
+  coord_fixed()
+```
+
+Now that we have a final model we want to train it on the full dataset, and then use it to predict the response for new data. For that we need to `fit()` again on the full dataset (the complete training + testing dataset).
+
+```{r velo final model}
+final_velo_model <- fit(rf_velo_workflow, velo)
+
+final_velo_model
+```
+
+Look at variable importance
+
+```{r velo vip}
+p <- workflow() %>%
+  add_recipe(velo_recipe) %>%
+  add_model(rf_velo_model) %>%
+  fit(velo) %>%
+  pull_workflow_fit() %>%
+  vip(aesthetics = list(alpha = 0.8, fill = "steelblue"))
+
+p
+
+# For a tailor made plot we can also extract the VIPs
+velo_ranger_obj <- pull_workflow_fit(final_velo_model)$fit
+
+vip_tib_velo <- 
+  tibble(Importance = velo_ranger_obj$variable.importance,
+         var = as.factor(names(velo_ranger_obj$variable.importance))) %>% 
+  mutate(var2 = recode(var, 
+                       "temp_slope_sc" = "Temperature slope",
+                       "mean_temp_ct" = "Mean temperature",
+                       "mean_oxy_ct" = "Mean oxygen",
+                       "group" = "Group"),
+         response = "Velocity")
+  
+vip_velo <- ggplot(vip_tib_velo, aes(Importance, reorder(var2, Importance))) + 
+  geom_point() + 
+  geom_segment(aes(x = 0, xend = Importance,
+                   yend = as.numeric(reorder(var2, Importance)))) + 
+  labs(y = "") + 
+  ggtitle("Velocity")
+
+# TODO: permutation-based importance
+vip_velo / vip_trend
+```
+
+Predict on new data, calculate delta biomass slopes
+
+```{r velo predict}
+# Can we make the English plot?
+nd_delta <- tibble(expand.grid(
+  group = unique(trend$group),
+  temp_vel_sc = c(0, 1),
+  mean_temp_ct = as.numeric(quantile(trend$mean_temp_ct, probs = c(0.1, 0.9))),
+  mean_oxy_ct = as.numeric(quantile(trend$mean_oxy_ct, probs = c(0.1, 0.5,  0.9))))
+  ) %>% 
+  mutate(mean_biom_ct = 0,
+         mean_temp_ct2 = ifelse(mean_temp_ct == min(mean_temp_ct), "cold", "warm"),
+         mean_oxy_ct2 = ifelse(mean_oxy_ct == min(mean_oxy_ct), "low oxygen", "median oxygen"),
+         mean_oxy_ct2 = ifelse(mean_oxy_ct == max(mean_oxy_ct), "high oxygen", mean_oxy_ct2))
+
+nd_delta$pred <- predict(final_velo_model, new_data = nd_delta)$.pred
+
+# So, we don't have a ranger object but a workflow object... 
+# https://workflows.tidymodels.org/reference/predict-workflow.html
+# FIXME: I assume because this is a ranger model, the se.method = "infjack",
+pred_ci <- predict(final_velo_model, new_data = nd_delta, type = "conf_int", 
+                   level = 0.95)
+
+nd_delta <- nd_delta %>% bind_cols(pred_ci)
+
+nd_delta <- nd_delta %>%
+  pivot_wider(names_from = temp_vel_sc,
+              values_from = c("pred", ".pred_lower", ".pred_upper")) %>% 
+  mutate(delta_biomass = pred_1 - pred_0,
+         delta_biomass_lwr = .pred_lower_1 - .pred_lower_0,
+         delta_biomass_upr = .pred_upper_1 - .pred_upper_0)
+
+order <- nd_delta %>%
+  filter(mean_temp_ct2 == "warm" & mean_oxy_ct2 == "median oxygen") %>%
+  arrange(desc(delta_biomass))
+
+ggplot(nd_delta %>% filter(!mean_oxy_ct2 == "median oxygen"),
+       aes(delta_biomass, factor(group, levels = order$group), group,
+           color = factor(mean_temp_ct2, levels = c("warm", "cold")))) +
+  geom_point(size = 3) +
+  geom_errorbar(width = 0, aes(xmin = delta_biomass_lwr, xmax = delta_biomass_upr)) +
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.2) +
+  facet_wrap(~factor(mean_oxy_ct2, levels = c("low oxygen", "high oxygen")),
+             ncol = 1) +
+  scale_color_manual(values = c("tomato3", "steelblue"), name = "") + 
+  labs(y = "", x = "delta biomass trend with 2 stdev increase in temperature slope") + 
+  theme(legend.position = "bottom")
+
+order <- nd_delta %>%
+  filter(mean_temp_ct2 == "warm" & mean_oxy_ct2 == "median oxygen") %>%
+  arrange(desc(delta_biomass))
+
+delta_trend <- ggplot(nd_delta %>% filter(mean_oxy_ct2 == "median oxygen"),
+       aes(delta_biomass, factor(group, levels = order$group),
+           color = factor(mean_temp_ct2, levels = c("warm", "cold")))) + 
+  geom_point(size = 3, position = position_dodge(width = 0.15)) + 
+  geom_errorbar(width = 0, aes(xmin = delta_biomass_lwr, xmax = delta_biomass_upr),
+                position = position_dodge(width = 0.15)) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.2) +
+  scale_color_manual(values = c("tomato3", "steelblue"), name = "") + 
+  labs(y = "", x = "delta biomass trend with 2 stdev increase in temperature slope") + 
+  theme(legend.position = "bottom")
+
+delta_trend
+```

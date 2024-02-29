@@ -1,20 +1,18 @@
 ---
-title: "Fit tweedie/delta models to biomass density"
+title: "Fit tweedie models to biomass density"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
+    page-layout: full
     embed-resources: true
-    fig-width: 8
-    #fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
 
 ## Intro
@@ -28,8 +26,8 @@ Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects
 #| warning: false
 
 # Load libraries, install if needed
-pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools",
-          "viridis", "RColorBrewer", "here", "sdmTMBextra") 
+pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "sdmTMB",
+          "viridis", "RColorBrewer", "here") 
 
 if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
 
@@ -39,13 +37,12 @@ if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
 
 invisible(lapply(pkgs, library, character.only = T))
 
-# Packages not on CRAN or dev version
-# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
-library(sdmTMB)
+# remotes::install_github("pbs-assess/sdmTMBextra")
+library(sdmTMBextra)
 
 # Source code for map plots
 # You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
-devtools::source_url("https://raw.githubusercontent.com/maxlindmark/pred-prey-overlap/main/R/functions/map-plot.R")
+devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
 
 # Set path
@@ -56,49 +53,49 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") |>
-  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
-  rename(X = x, Y = y) |> 
+d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>%
+  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
+  rename(X = x, Y = y) %>% 
   pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
                  flounder_juvenile, plaice_adult, plaice_juvenile),
-               names_to = "group", values_to = "density") |> 
-  separate(group, into = c("species", "life_stage"), remove = FALSE) |> 
+               names_to = "group", values_to = "density") %>% 
+  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
   drop_na(depth, temp, oxy, sal, density)
 
 # Drop dab!
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 1) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+# d %>%
+#   filter(group == "dab_juvenile" & quarter == 1) %>%
+#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
 #   ggplot(aes(X, Y, color = pres)) +
 #   geom_point(size = 0.3) +
 #   coord_fixed() +
 #   facet_wrap(~year)
 # 
-# d |>
-#   filter(group == "dab_juvenile" & quarter == 4) |>
-#   mutate(pres = ifelse(density > 0, "1", "0")) |>
+# d %>%
+#   filter(group == "dab_juvenile" & quarter == 4) %>%
+#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
 #   ggplot(aes(X, Y, color = pres)) +
 #   geom_point(size = 0.3) +
 #   coord_fixed() +
 #   facet_wrap(~year)
 
-d <- d |> filter(!species == "dab")
+d <- d %>% filter(!species == "dab")
 ```
 
 ## Scale variables
 
 ```{r}
-d <- d |> 
-  group_by(group) |> 
+d <- d %>% 
+  group_by(group) %>% # scale relative to the same mean for all groups
   mutate(temp_sc = as.vector(scale(temp)),
          temp_sq = temp_sc^2,
          oxy_sc = as.vector(scale(oxy)),
          oxy_sq = oxy_sc^2,
          sal_sc = as.vector(scale(sal)),
          depth_sc = as.vector(scale(depth)),
-         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+         depth_sq = depth_sc*depth_sc) %>%
   mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) |> 
+         year_f = as.factor(year)) %>% 
   ungroup()
 ```
 
@@ -109,17 +106,17 @@ pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2)
                        readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
 # Scale variables with respect to data, not the prediction grid!
-pred_grid <- pred_grid |> 
-  drop_na(depth, temp, oxy, sal) |> 
+pred_grid <- pred_grid %>% 
+  drop_na(depth, temp, oxy, sal) %>% 
   mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
          temp_sq = temp_sc^2,
          oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy),
          oxy_sq = oxy_sc^2,
          sal_sc = (sal - mean(d$sal)) / sd(d$sal),
          depth_sc = (depth - mean(d$depth)) / sd(d$depth),
-         depth_sq = depth_sc*depth_sc) |> # not sure this is needed!
+         depth_sq = depth_sc*depth_sc) %>% 
   mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) |> 
+         year_f = as.factor(year)) %>% 
   ungroup()
 ```
 
@@ -130,10 +127,11 @@ Plot residuals, save model object, plot conditional effects!
 pred_list <- list()
 pred_grid_list <- list()
 res_list <- list()
+cog_list <- list()
 
 for(i in unique(d$group)) { 
     
-    dd <- d |> filter(group == i)
+    dd <- d %>% filter(group == i)
 
     mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
 
@@ -157,10 +155,7 @@ for(i in unique(d$group)) {
     
     # Store residuals
     res_list[[i]] <- dd
-    
-    # Save model object
-    saveRDS(m3, paste0(home, "/output/models/sdm_02_m3_", i, ".rds"))
-     
+
     # Create prediction dfs for conditional effects
     nd <- data.frame(expand.grid(temp = seq(min(dd$temp),
                                             max(dd$temp),
@@ -168,10 +163,10 @@ for(i in unique(d$group)) {
                                  oxy = seq(min(dd$oxy),
                                            max(dd$oxy),
                                            length.out = 50),
-                                 quarter = c(1, 4))) |>
-      mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
+                                 quarter = c(1, 4))) %>%
+      mutate(temp_sc = (temp - mean(dd$temp)) / sd(dd$temp),
              temp_sq = temp_sc^2,
-             oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy)) |> # should be in relation to data I believe (not dd)
+             oxy_sc = (oxy - mean(dd$oxy)) / sd(dd$oxy)) %>%
       mutate(year = 1999, year_f = as.factor(1999), quarter_f = as.factor(quarter), sal_sc = 0, # and the rest...
              depth_sc = 0, depth_sq = 0,
              group = i)
@@ -180,14 +175,22 @@ for(i in unique(d$group)) {
     pred <- predict(m3, newdata = nd, re_form = NA, se_fit = TRUE)
     # TODO: why do I need both quarters to predict?
 
-    # Save
-    pred_list[[i]] <- pred |> filter(quarter == 1)
+    pred_list[[i]] <- pred %>% filter(quarter == 1)
 
     # Predict on grid 
-    p <- predict(m3, newdata = pred_grid) |> mutate(group = i)
+    p <- predict(m3, newdata = pred_grid) %>% mutate(group = i)
     
-    # Save
     pred_grid_list[[i]] <- p 
+    
+    # Predict on grid and get cog
+    pcog <- predict(m3, newdata = pred_grid, return_tmb_object = TRUE)
+    cog <- get_cog(pcog, format = "wide") %>% mutate(group = i)
+            
+    cog <- cog %>%
+      mutate_at(c("est_x", "lwr_x", "upr_x", "est_y", "lwr_y", "upr_y"),
+                ~ . * 1000)
+    
+    cog_list[[i]] <- cog
     
 }
 
@@ -195,15 +198,16 @@ for(i in unique(d$group)) {
 preds <- dplyr::bind_rows(pred_list)
 preds_grid <- dplyr::bind_rows(pred_grid_list)
 res <- dplyr::bind_rows(res_list)
+cogs <- dplyr::bind_rows(cog_list)
 ```
 
 ## Plot residuals
 
 ```{r}
 # Plot residuals
-res |> 
+res %>% 
   mutate(group2 = str_replace(group, "_", " "),
-         group2 = str_to_title(group2)) |> 
+         group2 = str_to_title(group2)) %>%
   ggplot(aes(sample = res)) +
   stat_qq(size = 0.75, shape = 21, fill = NA) +
   facet_wrap(~group2) +
@@ -218,6 +222,7 @@ ggsave(paste0(home, "/figures/supp/qq_sdm_02.pdf"), width = 17, height = 17, uni
 
 ```{r}
 write_csv(res, paste0(home, "/output/residuals_02_sdms.csv"))
-write_csv(preds, paste0(home, "/output/data_conditional_02_sdms.csv"))
-write_csv(preds_grid, paste0(home, "/output/data_pred_grids_02_sdms.csv"))
+write_csv(preds, paste0(home, "/output/conditional_02_sdms.csv"))
+write_csv(preds_grid, paste0(home, "/output/pred_grids_02_sdms.csv"))
+write_csv(cogs, paste0(home, "/output/cogs_02_sdms.csv"))
 ```

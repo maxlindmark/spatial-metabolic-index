@@ -1,20 +1,18 @@
 ---
 title: "Collate CPUE data"
 author: "Max Lindmark"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: today
+date-format: iso
+toc: true
 format: 
   html:
+    page-layout: full
     embed-resources: true
-    fig-width: 8
-    fig-asp: 0.618
 knitr: 
   opts_chunk:
     fig.align: center
+    out-width: 100%
 editor: source
-execute: 
-  echo: true
-  eval: true
-  cache: false
 ---
 
 # Intro
@@ -28,8 +26,8 @@ In this script, I load exchange data from datras and calculate catch of cod and 
 
 # Load libraries, install if needed
 pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "patchwork",
-          "janitor", "viridis", "RColorBrewer", "icesDatras", "mapdata", "rgdal",
-          "raster", "sf", "rgeos", "chron", "lattice", "ncdf4", "marmap", "rnaturalearth",
+          "janitor", "viridis", "RColorBrewer", "icesDatras", "mapdata", 
+          "raster", "sf", "chron", "lattice", "ncdf4", "marmap", "rnaturalearth",
           "rnaturalearthdata", "mapplots", "geosphere", "modelr") 
 
 if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
@@ -62,17 +60,17 @@ home <- here::here()
 # Read HH data
 #bits_hh <- getDATRAS(record = "HH", survey = "BITS", years = 1991:2021, quarters = c(1, 4))
 #write_csv(bits_hh, paste0(home, "/data/DATRAS_exchange/bits_hh.csv"))
-bits_hh <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_hh.csv")) |> filter(Year > 1992) # To match covariates
+bits_hh <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_hh.csv")) %>% filter(Year > 1992) # To match covariates
 
 # Read HL data
 #bits_hl <- getDATRAS(record = "HL", survey = "BITS", years = 1991:2021, quarters = c(1, 4))
 #write_csv(bits_hl, paste0(home, "/data/DATRAS_exchange/bits_hl.csv"))
-bits_hl <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_hl.csv")) |> filter(Year > 1992) # To match covariates
+bits_hl <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_hl.csv")) %>% filter(Year > 1992) # To match covariates
 
 # Read CA data
 #bits_ca <- getDATRAS(record = "CA", survey = "BITS", years = 1991:2021, quarters = c(1, 4))
 #write_csv(bits_ca, paste0(home, "/data/DATRAS_exchange/bits_ca.csv"))
-bits_ca <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_ca.csv")) |> filter(Year > 1992) # To match covariates
+bits_ca <- read_csv(paste0(home, "/data/DATRAS_exchange/bits_ca.csv")) %>% filter(Year > 1992) # To match covariates
 
 # Read gear standardization data 
 sweep <- read.csv(paste0(home, "/data/gear_standardization/sweep_9116.csv"), sep = ";", dec = ",", fileEncoding = "latin1")
@@ -96,14 +94,14 @@ sort(unique(bits_hl$Ship))
 # Assumptions:
 # SOL is Solea on ICES links above, and SOL1 is the older one of the two SOLs (1 and 2)
 # DAN is Dana
-# sweep |> filter(Ship == "DANS") |> distinct(Year, Country)
-# sweep |> filter(Ship == "DAN2") |> distinct(Year)
-# bits_hh |> filter(Ship == "67BC") |> distinct(Year, Country)
-# sweep |> filter(Ship == "DAN2") |> distinct(Year)
-# bits_hh |> filter(Ship == "26D4") |> distinct(Year) # Strange that 26DF doesn't extend far back. Which ship did the Danes use? Ok, I have no Danish data that old.
-# bits_hh |> filter(Country == "DK") |> distinct(Year)
+# sweep %>% filter(Ship == "DANS") %>% distinct(Year, Country)
+# sweep %>% filter(Ship == "DAN2") %>% distinct(Year)
+# bits_hh %>% filter(Ship == "67BC") %>% distinct(Year, Country)
+# sweep %>% filter(Ship == "DAN2") %>% distinct(Year)
+# bits_hh %>% filter(Ship == "26D4") %>% distinct(Year) # Strange that 26DF doesn't extend far back. Which ship did the Danes use? Ok, I have no Danish data that old.
+# bits_hh %>% filter(Country == "DK") %>% distinct(Year)
 
-bits_hh <- bits_hh |>
+bits_hh <- bits_hh %>%
   mutate(Ship2 = fct_recode(Ship,
                             "SOL" = "06S1", 
                             "SOL2" = "06SL",
@@ -120,10 +118,10 @@ bits_hh <- bits_hh |>
                             "DAR" = "LTDA",
                             "ATLD" = "RUJB",
                             "ATL" = "RUNT"), 
-         Ship2 = as.character(Ship2)) |> 
+         Ship2 = as.character(Ship2)) %>% 
   mutate(Ship3 = ifelse(Country == "LV" & Ship2 == "BAL", "BALL", Ship2))
 
-bits_hl <- bits_hl |>
+bits_hl <- bits_hl %>%
   mutate(Ship2 = fct_recode(Ship,
                             "SOL" = "06S1", 
                             "SOL2" = "06SL",
@@ -140,10 +138,10 @@ bits_hl <- bits_hl |>
                             "DAR" = "LTDA",
                             "ATLD" = "RUJB",
                             "ATL" = "RUNT"), 
-         Ship2 = as.character(Ship2)) |> 
+         Ship2 = as.character(Ship2)) %>% 
   mutate(Ship3 = ifelse(Country == "LV" & Ship2 == "BAL", "BALL", Ship2))
 
-bits_ca <- bits_ca |>
+bits_ca <- bits_ca %>%
   mutate(Ship2 = fct_recode(Ship,
                             "SOL" = "06S1", 
                             "SOL2" = "06SL",
@@ -160,7 +158,7 @@ bits_ca <- bits_ca |>
                             "DAR" = "LTDA",
                             "ATLD" = "RUJB",
                             "ATL" = "RUNT"), 
-         Ship2 = as.character(Ship2)) |> 
+         Ship2 = as.character(Ship2)) %>% 
   mutate(Ship3 = ifelse(Country == "LV" & Ship2 == "BAL", "BALL", Ship2))
 
 # Ok, which ships are missing in the exchange data?
@@ -180,7 +178,7 @@ sort(unique(sweep$Country))
 sort(unique(bits_hh$Country))
 
 # https://www.nationsonline.org/oneworld/country_code_list.htm#E
-bits_hh <- bits_hh |>
+bits_hh <- bits_hh %>%
   mutate(Country = fct_recode(Country,
                               "DEN" = "DK",
                               "EST" = "EE",
@@ -192,7 +190,7 @@ bits_hh <- bits_hh |>
                               "SWE" = "SE"),
          Country = as.character(Country))
 
-bits_hl <- bits_hl |>
+bits_hl <- bits_hl %>%
   mutate(Country = fct_recode(Country,
                               "DEN" = "DK",
                               "EST" = "EE",
@@ -204,7 +202,7 @@ bits_hl <- bits_hl |>
                               "SWE" = "SE"),
          Country = as.character(Country))
 
-bits_ca <- bits_ca |>
+bits_ca <- bits_ca %>%
   mutate(Country = fct_recode(Country,
                               "DEN" = "DK",
                               "EST" = "EE",
@@ -231,17 +229,17 @@ unique(bits_hl$Gear)[!unique(bits_hl$Gear) %in% unique(sweep$Gear)]
 #| message: false
 
 # Create ID column
-bits_ca <- bits_ca |> 
+bits_ca <- bits_ca %>% 
   mutate(IDx = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
-bits_hl <- bits_hl |> 
+bits_hl <- bits_hl %>% 
   mutate(IDx = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
-bits_hh <- bits_hh |> 
+bits_hh <- bits_hh %>% 
   mutate(IDx = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
 # Works like a haul-id
-bits_hh |> group_by(IDx) |> mutate(n = n()) |> ungroup() |> distinct(n)
+bits_hh %>% group_by(IDx) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
 ```
 
 #### Create the same unique haul-ID in the cpue data that I have in the sweep-file
@@ -249,13 +247,13 @@ bits_hh |> group_by(IDx) |> mutate(n = n()) |> ungroup() |> distinct(n)
 ```{r haul id check}
 #| message: false
 
-bits_hl <- bits_hl |> 
+bits_hl <- bits_hl %>% 
   mutate(haul.id = paste(Year, Quarter, Country, Ship3, Gear, StNo, HaulNo, sep = ":")) 
 
-bits_hh <- bits_hh |> 
+bits_hh <- bits_hh %>% 
   mutate(haul.id = paste(Year, Quarter, Country, Ship3, Gear, StNo, HaulNo, sep = ":")) 
 
-bits_hh |> group_by(haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
+bits_hh %>% group_by(haul.id) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
 ```
 
 #### Clean DATRAS EXCHANGE data
@@ -264,8 +262,8 @@ bits_hh |> group_by(haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
 #| message: false
 
 # Select just valid, additional and no oxygen hauls
-bits_hh <- bits_hh |>
-  #filter(!Country == "SWE") |> # I'll deal with Sweden later...
+bits_hh <- bits_hh %>%
+  #filter(!Country == "SWE") %>% # I'll deal with Sweden later...
   filter(HaulVal %in% c("A", "N", "V"))
 
 # Add ICES rectangle
@@ -282,7 +280,7 @@ bits_hh$sub_div <- over(pts, shape)$Area_27
 # Rename subdivisions to the more common names and do some more filtering (by sub div and area)
 sort(unique(bits_hh$sub_div))
 
-bits_hh <- bits_hh |> 
+bits_hh <- bits_hh %>% 
   mutate(sub_div = factor(sub_div),
          sub_div = fct_recode(sub_div,
                               "20" = "3.a.20",
@@ -302,16 +300,16 @@ bits_hh <- bits_hh |>
 # to standardize based on gear geometry). We add in the the HH data and then
 # transfer it to the other exchange data files when left_joining.
 # Check which Fishing lines I have in the sweep data:
-fishing_line <- sweep |> group_by(Gear) |> distinct(Fishing.line)
+fishing_line <- sweep %>% group_by(Gear) %>% distinct(Fishing.line)
 
 bits_hh <- left_join(bits_hh, fishing_line)
-# sweep |> group_by(Gear) |> distinct(Fishing.line)
-# bits_hh |> group_by(Gear) |> distinct(Fishing.line)
+# sweep %>% group_by(Gear) %>% distinct(Fishing.line)
+# bits_hh %>% group_by(Gear) %>% distinct(Fishing.line)
 bits_hh$Fishing.line <- as.numeric(bits_hh$Fishing.line)
 
 # Which gears do now have fishing line?
 bits_hh$Fishing.line[is.na(bits_hh$Fishing.line)] <- -9
-bits_hh |> filter(Fishing.line == -9) |> distinct(Gear)
+bits_hh %>% filter(Fishing.line == -9) %>% distinct(Gear)
 # 1  GRT
 # 2  CAM
 # 3  EXP
@@ -331,11 +329,11 @@ bits_hh |> filter(Fishing.line == -9) |> distinct(Gear)
 # factors my be in the sweep file)
 
 # Add these values:
-bits_hh <- bits_hh |> mutate(Fishing.line = ifelse(Gear == "FOT", 83, Fishing.line))
-bits_hh <- bits_hh |> mutate(Fishing.line = ifelse(Gear == "GOV", 160, Fishing.line))
+bits_hh <- bits_hh %>% mutate(Fishing.line = ifelse(Gear == "FOT", 83, Fishing.line))
+bits_hh <- bits_hh %>% mutate(Fishing.line = ifelse(Gear == "GOV", 160, Fishing.line))
 
 # Now select the hauls in the HH data when subsetting the HL data
-bits_hl <- bits_hl |>
+bits_hl <- bits_hl %>%
   filter(haul.id %in% bits_hh$haul.id)
 
 # Match columns from the HH data to the HL and CA data
@@ -343,48 +341,48 @@ sort(unique(bits_hh$sub_div))
 sort(colnames(bits_hh))
 
 # No NAs for the variables going in to the stomach haul ID
-unique(is.na(bits_hh |> dplyr::select(Year, Quarter, Month, Country, Rect, HaulNo)))
+unique(is.na(bits_hh %>% dplyr::select(Year, Quarter, Month, Country, Rect, HaulNo)))
 
 unique(bits_hh$Country)
 
 # MAKE SURE THE COUNTRY CODE IS THE SAME! FOR NOW I DON*T USE COUNTRY 2
-bits_hh <- bits_hh |> mutate(Country2 = NA,
+bits_hh <- bits_hh %>% mutate(Country2 = NA,
                               Country2 = ifelse(Country == "LAT", "LV", Country2),
                               Country2 = ifelse(Country == "POL", "PL", Country2),
                               Country2 = ifelse(Country == "SWE", "SE", Country2),
                               Country2 = ifelse(Country == "DEN", "DK", Country2))
 
-bits_hh_merge <- bits_hh |> 
-  mutate(id_haul_stomach = paste(Year, Quarter, Month, Country, Rect, HaulNo, sep = ".")) |> 
+bits_hh_merge <- bits_hh %>% 
+  mutate(id_haul_stomach = paste(Year, Quarter, Month, Country, Rect, HaulNo, sep = ".")) %>% 
   dplyr::select(sub_div, Rect, HaulVal, StdSpecRecCode, BySpecRecCode, Fishing.line, Month,
                 DataType, HaulDur, GroundSpeed, haul.id, IDx, ShootLat, ShootLong,
-                id_haul_stomach, Depth) |> 
+                id_haul_stomach, Depth) %>% 
   rename(depth_obs = Depth)
 
 bits_hl <- left_join(dplyr::select(bits_hl, -haul.id), bits_hh_merge, by = "IDx")
 bits_ca <- left_join(bits_ca, bits_hh_merge, by = "IDx")
 
 # Now filter the subdivisions I want from all data sets
-bits_hh <- bits_hh |> filter(sub_div %in% c(24, 25, 26, 27, 28))
-bits_hl <- bits_hl |> filter(sub_div %in% c(24, 25, 26, 27, 28))
-bits_ca <- bits_ca |> filter(sub_div %in% c(24, 25, 26, 27, 28))
+bits_hh <- bits_hh %>% filter(sub_div %in% c(24, 25, 26, 27, 28))
+bits_hl <- bits_hl %>% filter(sub_div %in% c(24, 25, 26, 27, 28))
+bits_ca <- bits_ca %>% filter(sub_div %in% c(24, 25, 26, 27, 28))
 ```
 
 ```{r test}
-bits_hl |> filter(Year == 2016 & Quarter == 1 & Month == 2 & Country == "SWE" & Rect == "39G4") |> distinct(HaulNo)
+bits_hl %>% filter(Year == 2016 & Quarter == 1 & Month == 2 & Country == "SWE" & Rect == "39G4") %>% distinct(HaulNo)
 ```
 
 #### Filter species
 
 ```{r filter species}
-bits_hl |> 
-  #filter(SpecCodeType == "W") |> 
-  group_by(haul.id, SpecCode) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  group_by(SpecCode) |> 
-  summarise(n = sum(n)) |> 
-  filter(n > 2000) |> 
+bits_hl %>% 
+  #filter(SpecCodeType == "W") %>% 
+  group_by(haul.id, SpecCode) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  group_by(SpecCode) %>% 
+  summarise(n = sum(n)) %>% 
+  filter(n > 2000) %>% 
   mutate(species = SpecCode,
          species = ifelse(SpecCode %in% c("126417", "161722"), "herring", species),
          species = ifelse(SpecCode %in% c("126425", "161789"), "sprat", species),
@@ -398,7 +396,7 @@ bits_hl |>
          species = ifelse(SpecCode %in% c("127149", "616195"), "turbot", species),
          species = ifelse(SpecCode %in% c("127203"), "shorthorn_sculpin", species),
          species = ifelse(SpecCode %in% c("126436", "164712"), "cod", species)
-         ) |> 
+         ) %>% 
   ggplot() +
   geom_bar(aes(reorder(species, desc(n)), n), stat = "identity") + 
   theme(axis.text.x = element_text(angle = 90, size = 11)) + 
@@ -408,38 +406,38 @@ bits_hl |>
 # Cod, flounder, plaice, dab
 
 # Plot some species in space!
-bits_hl |> 
+bits_hl %>% 
   mutate(species = NA,
          species = ifelse(SpecCode %in% c("126436", "164712"), "cod", species),
          species = ifelse(SpecCode %in% c("127141", "172894"), "flounder", species),
          species = ifelse(SpecCode %in% c("127143", "172902"), "plaice", species),
-         species = ifelse(SpecCode %in% c("127139", "172881"), "dab", species)) |> 
-  drop_na(species) |> 
-  group_by(Year, haul.id, ShootLong, ShootLat, species) |> 
-  summarise(tot_no = sum(TotalNo)) |> 
-  filter(tot_no > 0) |> 
-  filter(ShootLong > 13.5) |> 
+         species = ifelse(SpecCode %in% c("127139", "172881"), "dab", species)) %>% 
+  drop_na(species) %>% 
+  group_by(Year, haul.id, ShootLong, ShootLat, species) %>% 
+  summarise(tot_no = sum(TotalNo)) %>% 
+  filter(tot_no > 0) %>% 
+  filter(ShootLong > 13.5) %>% 
   ggplot(aes(ShootLong, ShootLat, color = log(tot_no))) + 
   geom_point() +
   facet_grid(species ~ Year)
 
-t <- bits_ca |>
-  filter(SpecCode %in% c("126436", "164712")) |>
-  group_by(Year) |>
-  drop_na(Age) |>
+t <- bits_ca %>%
+  filter(SpecCode %in% c("126436", "164712")) %>%
+  group_by(Year) %>%
+  drop_na(Age) %>%
   summarise(max_age = max(Age, na.rm = TRUE))
 
-t |> filter(Year %in% c(1995, 2019))
+t %>% filter(Year %in% c(1995, 2019))
 
 ggplot(t, aes(Year, max_age)) +
   geom_line()
 
-# bits_ca |> 
-#   filter(SpecCode %in% c("126436", "164712")) |> 
-#   group_by(Year) |> 
-#   drop_na(Age) |> 
+# bits_ca %>% 
+#   filter(SpecCode %in% c("126436", "164712")) %>% 
+#   group_by(Year) %>% 
+#   drop_na(Age) %>% 
 #   # summarise(max_age = max(Age, na.rm = TRUE),
-#   #           upr_age = quantile(Age, probs = 0.95, na.rm = TRUE)) |> 
+#   #           upr_age = quantile(Age, probs = 0.95, na.rm = TRUE)) %>% 
 #   ggplot(aes(Age, color = as.factor(Year))) + 
 #   geom_density(adjust = 3, fill = NA)
 ```
@@ -447,28 +445,28 @@ ggplot(t, aes(Year, max_age)) +
 ```{r filter species 2}
 #| message: false
 
-hlcod <- bits_hl |>
-  filter(SpecCode %in% c("126436", "164712")) |> 
+hlcod <- bits_hl %>%
+  filter(SpecCode %in% c("126436", "164712")) %>% 
   mutate(Species = "Gadus morhua")
 
-hlfle <- bits_hl |>
-  filter(SpecCode %in% c("127141", "172894")) |> 
+hlfle <- bits_hl %>%
+  filter(SpecCode %in% c("127141", "172894")) %>% 
   mutate(Species = "Platichthys flesus")
 
-hlpla <- bits_hl |>
-  filter(SpecCode %in% c("127143", "172902")) |>
+hlpla <- bits_hl %>%
+  filter(SpecCode %in% c("127143", "172902")) %>%
   mutate(Species = "Pleuronectes platessa")
 
-hldab <- bits_hl |>
-  filter(SpecCode %in% c("127139", "172881")) |> 
+hldab <- bits_hl %>%
+  filter(SpecCode %in% c("127139", "172881")) %>% 
   mutate(Species = "Limanda limanda")
 
 # Check number of hauls per species
-hlcod |> distinct(haul.id) |> nrow()
-hlfle |> distinct(haul.id) |> nrow()
-hlpla |> distinct(haul.id) |> nrow()
-hldab |> distinct(haul.id) |> nrow()
-bits_hh |> distinct(haul.id) |> nrow()
+hlcod %>% distinct(haul.id) %>% nrow()
+hlfle %>% distinct(haul.id) %>% nrow()
+hlpla %>% distinct(haul.id) %>% nrow()
+hldab %>% distinct(haul.id) %>% nrow()
+bits_hh %>% distinct(haul.id) %>% nrow()
 
 ```
 
@@ -482,29 +480,29 @@ comcol <- intersect(names(hlcod), names(bits_hh))
 
 # What is the proportion of zero-catch hauls?
 # Here we don't have zero catches
-hlcod |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(HLNoAtLngt)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
+hlcod %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(HLNoAtLngt)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
   distinct(zero_catch)
 
 # Cod: Add 0s and then remove lines with SpecVal = 0 (first NA because we don't have a match in the HH, then make them 0 later)
 hlcod0 <- full_join(hlcod, bits_hh[, comcol], by = comcol)
 
 # No zeroes yet
-hlcod0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(HLNoAtLngt)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
+hlcod0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(HLNoAtLngt)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
   distinct(zero_catch) 
 
 hlcod0$SpecVal[is.na(hlcod0$SpecVal)] <- "zeroCatch"
 
 hlcod0$SpecVal <- factor(hlcod0$SpecVal)
 
-hlcod0 <- hlcod0 |> filter(!SpecVal == "0")
+hlcod0 <- hlcod0 %>% filter(!SpecVal == "0")
 
 # Add species again after merge
 hlcod0$Species <- "Gadus morhua"
@@ -517,7 +515,7 @@ hlfle0 <- hlfle0[!(is.na(hlfle0$Species) & hlfle0$StdSpecRecCode != 1), ]
 hlfle0$SpecVal[is.na(hlfle0$SpecVal)] <- "zeroCatch"
 hlfle0$SpecVal <- factor(hlfle0$SpecVal)
 
-hlfle0 <- hlfle0 |> filter(!SpecVal == "0")
+hlfle0 <- hlfle0 %>% filter(!SpecVal == "0")
 
 hlfle0$Species<-"Platichthys flesus"
 
@@ -529,7 +527,7 @@ hlpla0 <- hlpla0[!(is.na(hlpla0$Species) & hlpla0$StdSpecRecCode != 1), ]
 hlpla0$SpecVal[is.na(hlpla0$SpecVal)] <- "zeroCatch"
 hlpla0$SpecVal <- factor(hlpla0$SpecVal)
 
-hlpla0 <- hlpla0 |> filter(!SpecVal == "0")
+hlpla0 <- hlpla0 %>% filter(!SpecVal == "0")
 
 hlpla0$Species<-"Pleuronectes platessa"
 
@@ -541,15 +539,15 @@ hldab0 <- hldab0[!(is.na(hldab0$Species) & hldab0$StdSpecRecCode != 1), ]
 hldab0$SpecVal[is.na(hldab0$SpecVal)] <- "zeroCatch"
 hldab0$SpecVal <- factor(hldab0$SpecVal)
 
-hldab0 <- hldab0 |> filter(!SpecVal == "0")
+hldab0 <- hldab0 %>% filter(!SpecVal == "0")
 
 hldab0$Species<-"Limanda limanda"
 
 # Check number of hauls per species
-hlcod0 |> distinct(haul.id) |> nrow()
-hlfle0 |> distinct(haul.id) |> nrow()
-hlpla0 |> distinct(haul.id) |> nrow()
-hldab0 |> distinct(haul.id) |> nrow()
+hlcod0 %>% distinct(haul.id) %>% nrow()
+hlfle0 %>% distinct(haul.id) %>% nrow()
+hlpla0 %>% distinct(haul.id) %>% nrow()
+hldab0 %>% distinct(haul.id) %>% nrow()
 ```
 
 #### Create (unstandardized) CPUE for `SpecVal=1`. If `DataType=C` then `CPUEun=HLNoAtLngt`, if `DataType=R` then `CPUEun=HLNoAtLngt/(HaulDur/60)`, if `DataType=S` then `CPUEun=(HLNoAtLngt*SubFactor)/(HaulDur/60)`. If `SpecVal="zeroCatch"` then `CPUEun=0`, if `SpecVal=4` we need to decide (no length measurements, only total catch). Note that here we also add zero CPUE if `SpecVal=="zeroCatch"`.
@@ -560,7 +558,7 @@ Then I will sum for the same haul the CPUE of the same length classes if they we
 #| message: false
 
 # Cod
-hlcod0 <- hlcod0 |>
+hlcod0 <- hlcod0 %>%
   mutate(CPUEun = ifelse(SpecVal == "1" & DataType == "C",
                          HLNoAtLngt,
                          
@@ -573,60 +571,60 @@ hlcod0 <- hlcod0 |>
                                        ifelse(SpecVal == "zeroCatch", 0, NA)))))
 
 # Plot and fill by zero catch
-hlcod0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlcod0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlcod0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlcod0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 # Some rows have multiple rows per combination of length class and haul id (i suppose often because it's split by sex), so we need to sum it up 
-hlcod0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
-hlcod0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2) |> as.data.frame() |> head(20)
-test <- hlcod0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2)
+hlcod0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
+hlcod0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2) %>% as.data.frame() %>% head(20)
+test <- hlcod0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2)
 test_id <- test$haul.id[2]
 
-hlcodL <- hlcod0 |> 
-  group_by(LngtClass, haul.id) |> 
-  mutate(CPUEun = sum(CPUEun)) |>
-  ungroup() |> 
-  mutate(id3 = paste(haul.id, LngtClass)) |> 
-  distinct(id3, .keep_all = TRUE) |> 
+hlcodL <- hlcod0 %>% 
+  group_by(LngtClass, haul.id) %>% 
+  mutate(CPUEun = sum(CPUEun)) %>%
+  ungroup() %>% 
+  mutate(id3 = paste(haul.id, LngtClass)) %>% 
+  distinct(id3, .keep_all = TRUE) %>% 
   dplyr::select(-id3) # Clean up a bit
 
 # Check with an ID
 filter(hlcod0, haul.id == test_id)
-filter(hlcodL, haul.id == test_id) |> as.data.frame()
+filter(hlcodL, haul.id == test_id) %>% as.data.frame()
 
 # Do we still have 0 catches?
-hlcodL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlcodL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlcodL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlcodL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 
 # Flounder
-hlfle0 <- hlfle0 |>
+hlfle0 <- hlfle0 %>%
   mutate(CPUEun = ifelse(SpecVal == "1" & DataType == "C",
                          HLNoAtLngt,
                          
@@ -639,60 +637,60 @@ hlfle0 <- hlfle0 |>
                                        ifelse(SpecVal == "zeroCatch", 0, NA)))))
 
 # Plot and fill by zero catch
-hlfle0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlfle0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlfle0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlfle0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 # Some rows have multiple rows per combination of length class and haul id (i suppose often because it's split by sex), so we need to sum it up 
-hlfle0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
-hlfle0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2) |> as.data.frame() |> head(20)
-test <- hlfle0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2)
+hlfle0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
+hlfle0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2) %>% as.data.frame() %>% head(20)
+test <- hlfle0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2)
 test_id <- test$haul.id[2]
 
-hlfleL <- hlfle0 |> 
-  group_by(LngtClass, haul.id) |> 
-  mutate(CPUEun = sum(CPUEun)) |>
-  ungroup() |> 
-  mutate(id3 = paste(haul.id, LngtClass)) |> 
-  distinct(id3, .keep_all = TRUE) |> 
+hlfleL <- hlfle0 %>% 
+  group_by(LngtClass, haul.id) %>% 
+  mutate(CPUEun = sum(CPUEun)) %>%
+  ungroup() %>% 
+  mutate(id3 = paste(haul.id, LngtClass)) %>% 
+  distinct(id3, .keep_all = TRUE) %>% 
   dplyr::select(-id3) # Clean up a bit
 
 # Check with an ID
 filter(hlfle0, haul.id == test_id)
-filter(hlfleL, haul.id == test_id) |> as.data.frame()
+filter(hlfleL, haul.id == test_id) %>% as.data.frame()
 
 # Do we still have 0 catches?
-hlfleL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlfleL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlfleL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlfleL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 
 # Plaice
-hlpla0 <- hlpla0 |>
+hlpla0 <- hlpla0 %>%
   mutate(CPUEun = ifelse(SpecVal == "1" & DataType == "C",
                          HLNoAtLngt,
                          
@@ -705,60 +703,60 @@ hlpla0 <- hlpla0 |>
                                        ifelse(SpecVal == "zeroCatch", 0, NA)))))
 
 # Plot and fill by zero catch
-hlpla0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlpla0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlpla0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlpla0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 # Some rows have multiple rows per combination of length class and haul id (i suppose often because it's split by sex), so we need to sum it up 
-hlpla0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
-hlpla0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2) |> as.data.frame() |> head(20)
-test <- hlpla0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2)
+hlpla0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
+hlpla0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2) %>% as.data.frame() %>% head(20)
+test <- hlpla0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2)
 test_id <- test$haul.id[2]
 
-hlplaL <- hlpla0 |> 
-  group_by(LngtClass, haul.id) |> 
-  mutate(CPUEun = sum(CPUEun)) |>
-  ungroup() |> 
-  mutate(id3 = paste(haul.id, LngtClass)) |> 
-  distinct(id3, .keep_all = TRUE) |> 
+hlplaL <- hlpla0 %>% 
+  group_by(LngtClass, haul.id) %>% 
+  mutate(CPUEun = sum(CPUEun)) %>%
+  ungroup() %>% 
+  mutate(id3 = paste(haul.id, LngtClass)) %>% 
+  distinct(id3, .keep_all = TRUE) %>% 
   dplyr::select(-id3) # Clean up a bit
 
 # Check with an ID
 filter(hlpla0, haul.id == test_id)
-filter(hlplaL, haul.id == test_id) |> as.data.frame()
+filter(hlplaL, haul.id == test_id) %>% as.data.frame()
 
 # Do we still have 0 catches?
-hlplaL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hlplaL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hlplaL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hlplaL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 
 # Dab
-hldab0 <- hldab0 |>
+hldab0 <- hldab0 %>%
   mutate(CPUEun = ifelse(SpecVal == "1" & DataType == "C",
                          HLNoAtLngt,
                          
@@ -771,54 +769,54 @@ hldab0 <- hldab0 |>
                                        ifelse(SpecVal == "zeroCatch", 0, NA)))))
 
 # Plot and fill by zero catch
-hldab0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hldab0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hldab0 |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hldab0 %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 
 # Some rows have multiple rows per combination of length class and haul id (i suppose often because it's split by sex), so we need to sum it up 
-hldab0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> distinct(n)
-hldab0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2) |> as.data.frame() |> head(20)
-test <- hldab0 |> group_by(LngtClass, haul.id) |> mutate(n = n()) |> ungroup() |> filter(n == 2)
+hldab0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% distinct(n)
+hldab0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2) %>% as.data.frame() %>% head(20)
+test <- hldab0 %>% group_by(LngtClass, haul.id) %>% mutate(n = n()) %>% ungroup() %>% filter(n == 2)
 test_id <- test$haul.id[2]
 
-hldabL <- hldab0 |> 
-  group_by(LngtClass, haul.id) |> 
-  mutate(CPUEun = sum(CPUEun)) |>
-  ungroup() |> 
-  mutate(id3 = paste(haul.id, LngtClass)) |> 
-  distinct(id3, .keep_all = TRUE) |> 
+hldabL <- hldab0 %>% 
+  group_by(LngtClass, haul.id) %>% 
+  mutate(CPUEun = sum(CPUEun)) %>%
+  ungroup() %>% 
+  mutate(id3 = paste(haul.id, LngtClass)) %>% 
+  distinct(id3, .keep_all = TRUE) %>% 
   dplyr::select(-id3) # Clean up a bit
 
 # Check with an ID
 filter(hldab0, haul.id == test_id)
-filter(hldabL, haul.id == test_id) |> as.data.frame()
+filter(hldabL, haul.id == test_id) %>% as.data.frame()
 
 # Do we still have 0 catches?
-hldabL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
+hldabL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
   filter(!CPUEun_haul == 0)
 
-hldabL |>
-  group_by(haul.id, Year) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |>
-  group_by(Year, zero_catch) |> 
-  summarise(n = n()) |> 
+hldabL %>%
+  group_by(haul.id, Year) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>%
+  group_by(Year, zero_catch) %>% 
+  summarise(n = n()) %>% 
   ggplot(aes(x = Year, y = n, fill = zero_catch)) +
   geom_bar(stat = "identity")
 ```
@@ -829,10 +827,10 @@ hldabL |>
 #| message: false
 
 # Cod
-bits_ca_cod <- bits_ca |> 
-  filter(SpecCode %in% c("164712", "126436")) |> 
-  mutate(StNo = as.numeric(StNo)) |> 
-  mutate(Species = "Cod") |> 
+bits_ca_cod <- bits_ca %>% 
+  filter(SpecCode %in% c("164712", "126436")) %>% 
+  mutate(StNo = as.numeric(StNo)) %>% 
+  mutate(Species = "Cod") %>% 
   mutate(ID = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
 # Now I need to copy rows with NoAtLngt > 1 so that 1 row = 1 ind
@@ -848,11 +846,11 @@ bits_ca_cod <- bits_ca_cod %>% map_df(., rep, .$CANoAtLngt)
 # Looks ok!
 
 # Standardize length and drop NA weights (need that for condition)
-bits_ca_cod <- bits_ca_cod |> 
-  drop_na(IndWgt) |> 
-  drop_na(LngtClass) |> 
-  filter(IndWgt > 0 & LngtClass > 0) |>  # Filter positive length and weight
-  mutate(weight_kg = IndWgt/1000) |> 
+bits_ca_cod <- bits_ca_cod %>% 
+  drop_na(IndWgt) %>% 
+  drop_na(LngtClass) %>% 
+  filter(IndWgt > 0 & LngtClass > 0) %>%  # Filter positive length and weight
+  mutate(weight_kg = IndWgt/1000) %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
                             LngtClass)) # Standardize length ((https://vocab.ices.dk/?ref=18))
@@ -864,46 +862,46 @@ ggplot(bits_ca_cod, aes(IndWgt, length_cm)) +
 
 # Now extract the coefficients for each year (not bothering with outliers at the moment)
 cod_intercept <- bits_ca_cod %>% 
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "(Intercept)") |> 
-  mutate(a = exp(estimate)) |> 
-  mutate(Year = as.integer(Year)) |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "(Intercept)") %>% 
+  mutate(a = exp(estimate)) %>% 
+  mutate(Year = as.integer(Year)) %>% 
   dplyr::select(Year, a)
 
 cod_slope <- bits_ca_cod %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "log(length_cm)") |> 
-  mutate(Year = as.integer(Year)) |> 
-  rename("b" = "estimate") |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "log(length_cm)") %>% 
+  mutate(Year = as.integer(Year)) %>% 
+  rename("b" = "estimate") %>% 
   dplyr::select(Year, b)
 
 mean(cod_intercept$a)
 mean(cod_slope$b)
 
 # Flounder
-bits_ca_fle <- bits_ca |> 
-  filter(SpecCode %in% c("127141", "172894")) |> 
-  mutate(StNo = as.numeric(StNo)) |> 
-  mutate(Species = "Flounder") |> 
+bits_ca_fle <- bits_ca %>% 
+  filter(SpecCode %in% c("127141", "172894")) %>% 
+  mutate(StNo = as.numeric(StNo)) %>% 
+  mutate(Species = "Flounder") %>% 
   mutate(ID = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
 bits_ca_fle <- bits_ca_fle %>% map_df(., rep, .$CANoAtLngt)
 
 # Standardize length and drop NA weights (need that for condition)
-bits_ca_fle <- bits_ca_fle |> 
-  drop_na(IndWgt) |> 
-  drop_na(LngtClass) |> 
-  filter(IndWgt > 0 & LngtClass > 0) |>  # Filter positive length and weight
-  mutate(weight_kg = IndWgt/1000) |> 
+bits_ca_fle <- bits_ca_fle %>% 
+  drop_na(IndWgt) %>% 
+  drop_na(LngtClass) %>% 
+  filter(IndWgt > 0 & LngtClass > 0) %>%  # Filter positive length and weight
+  mutate(weight_kg = IndWgt/1000) %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
-                            LngtClass)) |> # Standardize length ((https://vocab.ices.dk/?ref=18))
-  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) |>
-  filter(keep == "Y") |> 
+                            LngtClass)) %>% # Standardize length ((https://vocab.ices.dk/?ref=18))
+  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) %>%
+  filter(keep == "Y") %>% 
   filter(length_cm < 70)
 
 # Plot
@@ -913,21 +911,21 @@ ggplot(bits_ca_fle, aes(IndWgt, length_cm, color = LngtCode)) +
 
 # Now extract the coefficients for each year (not bothering with outliers at the moment)
 fle_intercept <- bits_ca_fle %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "(Intercept)") |> 
-  mutate(a = exp(estimate)) |> 
-  mutate(Year = as.integer(Year)) |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "(Intercept)") %>% 
+  mutate(a = exp(estimate)) %>% 
+  mutate(Year = as.integer(Year)) %>% 
   dplyr::select(Year, a)
 
 fle_slope <- bits_ca_fle %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "log(length_cm)") |> 
-  mutate(Year = as.integer(Year)) |> 
-  rename("b" = "estimate") |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "log(length_cm)") %>% 
+  mutate(Year = as.integer(Year)) %>% 
+  rename("b" = "estimate") %>% 
   dplyr::select(Year, b)
 
 mean(fle_intercept$a)
@@ -935,25 +933,25 @@ mean(fle_slope$b)
 
 
 # Plaice
-bits_ca_pla <- bits_ca |> 
-  filter(SpecCode %in% c("127143", "172902")) |> 
-  mutate(StNo = as.numeric(StNo)) |> 
-  mutate(Species = "Plaice") |> 
+bits_ca_pla <- bits_ca %>% 
+  filter(SpecCode %in% c("127143", "172902")) %>% 
+  mutate(StNo = as.numeric(StNo)) %>% 
+  mutate(Species = "Plaice") %>% 
   mutate(ID = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
 bits_ca_pla <- bits_ca_pla %>% map_df(., rep, .$CANoAtLngt)
 
 # Standardize length and drop NA weights (need that for condition)
-bits_ca_pla <- bits_ca_pla |> 
-  drop_na(IndWgt) |> 
-  drop_na(LngtClass) |> 
-  filter(IndWgt > 0 & LngtClass > 0) |>  # Filter positive length and weight
-  mutate(weight_kg = IndWgt/1000) |> 
+bits_ca_pla <- bits_ca_pla %>% 
+  drop_na(IndWgt) %>% 
+  drop_na(LngtClass) %>% 
+  filter(IndWgt > 0 & LngtClass > 0) %>%  # Filter positive length and weight
+  mutate(weight_kg = IndWgt/1000) %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
-                            LngtClass)) |> # Standardize length ((https://vocab.ices.dk/?ref=18))
-  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) |>
-  filter(keep == "Y") |> 
+                            LngtClass)) %>% # Standardize length ((https://vocab.ices.dk/?ref=18))
+  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) %>%
+  filter(keep == "Y") %>% 
   filter(length_cm < 70)
 
 # Plot
@@ -963,21 +961,21 @@ ggplot(bits_ca_pla, aes(IndWgt, length_cm, color = LngtCode)) +
 
 # Now extract the coefficients for each year (not bothering with outliers at the moment)
 pla_intercept <- bits_ca_pla %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "(Intercept)") |> 
-  mutate(a = exp(estimate)) |> 
-  mutate(Year = as.integer(Year)) |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "(Intercept)") %>% 
+  mutate(a = exp(estimate)) %>% 
+  mutate(Year = as.integer(Year)) %>% 
   dplyr::select(Year, a)
 
 pla_slope <- bits_ca_pla %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "log(length_cm)") |> 
-  mutate(Year = as.integer(Year)) |> 
-  rename("b" = "estimate") |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "log(length_cm)") %>% 
+  mutate(Year = as.integer(Year)) %>% 
+  rename("b" = "estimate") %>% 
   dplyr::select(Year, b)
 
 mean(pla_intercept$a)
@@ -985,25 +983,25 @@ mean(pla_slope$b)
 
 
 # Dab
-bits_ca_dab <- bits_ca |> 
-  filter(SpecCode %in% c("127139", "172881")) |> 
-  mutate(StNo = as.numeric(StNo)) |> 
-  mutate(Species = "Dab") |> 
+bits_ca_dab <- bits_ca %>% 
+  filter(SpecCode %in% c("127139", "172881")) %>% 
+  mutate(StNo = as.numeric(StNo)) %>% 
+  mutate(Species = "Dab") %>% 
   mutate(ID = paste(Year, Quarter, Country, Ship, Gear, StNo, HaulNo, sep = "."))
 
 bits_ca_dab <- bits_ca_dab %>% map_df(., rep, .$CANoAtLngt)
 
 # Standardize length and drop NA weights (need that for condition)
-bits_ca_dab <- bits_ca_dab |> 
-  drop_na(IndWgt) |> 
-  drop_na(LngtClass) |> 
-  filter(IndWgt > 0 & LngtClass > 0) |>  # Filter positive length and weight
-  mutate(weight_kg = IndWgt/1000) |> 
+bits_ca_dab <- bits_ca_dab %>% 
+  drop_na(IndWgt) %>% 
+  drop_na(LngtClass) %>% 
+  filter(IndWgt > 0 & LngtClass > 0) %>%  # Filter positive length and weight
+  mutate(weight_kg = IndWgt/1000) %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
-                            LngtClass)) |> # Standardize length ((https://vocab.ices.dk/?ref=18))
-  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) |>
-  filter(keep == "Y") |> 
+                            LngtClass)) %>% # Standardize length ((https://vocab.ices.dk/?ref=18))
+  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) %>%
+  filter(keep == "Y") %>% 
   filter(length_cm < 70)
 
 # Plot
@@ -1011,25 +1009,25 @@ ggplot(bits_ca_dab, aes(IndWgt, length_cm, color = LngtCode)) +
   geom_point() + 
   facet_wrap(~Year)
 
-bits_ca_dab <- bits_ca_dab |> filter(IndWgt < 1000)
+bits_ca_dab <- bits_ca_dab %>% filter(IndWgt < 1000)
 
 # Now extract the coefficients for each year (not bothering with outliers at the moment)
 dab_intercept <- bits_ca_dab %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "(Intercept)") |> 
-  mutate(a = exp(estimate)) |> 
-  mutate(Year = as.integer(Year)) |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "(Intercept)") %>% 
+  mutate(a = exp(estimate)) %>% 
+  mutate(Year = as.integer(Year)) %>% 
   dplyr::select(Year, a)
 
 dab_slope <- bits_ca_dab %>%
-  split(.$Year) |> 
-  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'Year') |>
-  filter(term == "log(length_cm)") |> 
-  mutate(Year = as.integer(Year)) |> 
-  rename("b" = "estimate") |> 
+  split(.$Year) %>% 
+  purrr::map(~lm(log(IndWgt) ~ log(length_cm), data = .x)) %>%
+  purrr::map_df(broom::tidy, .id = 'Year') %>%
+  filter(term == "log(length_cm)") %>% 
+  mutate(Year = as.integer(Year)) %>% 
+  rename("b" = "estimate") %>% 
   dplyr::select(Year, b)
 
 mean(dab_intercept$a)
@@ -1057,7 +1055,7 @@ hlplaL <- left_join(hlplaL, pla_intercept, by = "Year")
 hlplaL <- left_join(hlplaL, pla_slope, by = "Year")
 
 # Now replace NA a and b (don't have individual data for all years) with the mean
-hlplaL <- hlplaL |> 
+hlplaL <- hlplaL %>% 
   mutate(a = ifelse(is.na(a), mean(a, na.rm = TRUE), a),
          b = ifelse(is.na(b), mean(b, na.rm = TRUE), b))
 
@@ -1065,7 +1063,7 @@ hldabL <- left_join(hldabL, dab_intercept, by = "Year")
 hldabL <- left_join(hldabL, dab_slope, by = "Year")
 
 # Now replace NA a and b (don't have individual data for all years) with the mean
-hldabL <- hldabL |> 
+hldabL <- hldabL %>% 
   mutate(a = ifelse(is.na(a), mean(a, na.rm = TRUE), a),
          b = ifelse(is.na(b), mean(b, na.rm = TRUE), b))
 ```
@@ -1077,7 +1075,7 @@ hldabL <- hldabL |>
 
 # Cod
 # First standardize length to cm and then check how zero-catches are implemented at this stage
-hlcodL <- hlcodL |> 
+hlcodL <- hlcodL %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
                             LngtClass)) # Standardize length ((https://vocab.ices.dk/?ref=18))
@@ -1085,27 +1083,27 @@ hlcodL <- hlcodL |>
 filter(hlcodL, length_cm == 0) # No such thing
 
 # Now check if all rows where length is NA are the ones with zero catch!
-hlcodL |> 
+hlcodL %>% 
   mutate(length2 = replace_na(length_cm, -9),
-         no_length = ifelse(length2 < 0, "T", "F")) |> 
+         no_length = ifelse(length2 < 0, "T", "F")) %>% 
   ggplot(aes(length2, CPUEun, color = no_length)) + geom_point(alpha = 0.2) + facet_wrap(~no_length)
 
-hlcodL |> filter(CPUEun == 0) |> distinct(length_cm)
+hlcodL %>% filter(CPUEun == 0) %>% distinct(length_cm)
 
 # Right, so all hauls with zero catch have NA length_cm. I don't have any NA catches
-t <- hlcodL |> drop_na(CPUEun)
-t <- hlcodL |> filter(CPUEun == 0)
-t <- hlcodL |> drop_na(length_cm)
+t <- hlcodL %>% drop_na(CPUEun)
+t <- hlcodL %>% filter(CPUEun == 0)
+t <- hlcodL %>% drop_na(length_cm)
 
 # In other words, a zero catch is when the catch is zero and length_cm is NA
 # In order to not get any NA CPUEs in unit biomass because length is NA (I want them instead
 # to be 0, as the numbers-CPUE is), I will replace length_cm == NA with length_cm == 0 before
 # calculating biomass CPUE
-hlcodL <- hlcodL |> mutate(length_cm2 = replace_na(length_cm, 0))
+hlcodL <- hlcodL %>% mutate(length_cm2 = replace_na(length_cm, 0))
 
 # Standardize length in the haul-data and calculate weight
-hlcodL <- hlcodL |> 
-  mutate(weight_kg = (a*length_cm2^b)/1000) |> 
+hlcodL <- hlcodL %>% 
+  mutate(weight_kg = (a*length_cm2^b)/1000) %>% 
   mutate(CPUEun_kg = weight_kg*CPUEun)
 
 # Plot and check it's correct also in this data
@@ -1114,8 +1112,8 @@ ggplot(hlcodL, aes(weight_kg, length_cm2)) +
   facet_wrap(~Year)
 
 # Hmm, some unrealistic weights actually
-hlcodL |> arrange(desc(weight_kg)) |> as.data.frame() |> head(20)
-hlcodL <- hlcodL |> filter(weight_kg < 100 & length_cm2 < 135)
+hlcodL %>% arrange(desc(weight_kg)) %>% as.data.frame() %>% head(20)
+hlcodL <- hlcodL %>% filter(weight_kg < 100 & length_cm2 < 135)
 
 ggplot(hlcodL, aes(weight_kg, length_cm2)) +
   geom_point() + 
@@ -1124,49 +1122,49 @@ ggplot(hlcodL, aes(weight_kg, length_cm2)) +
 
 # Flounder
 # First standardize length to cm and then check how zero-catches are implemented at this stage
-hlfleL <- hlfleL |> 
+hlfleL <- hlfleL %>% 
   mutate(length_cm = ifelse(LngtCode %in% c(".", "0"), 
                             LngtClass/10,
                             LngtClass)) # Standardize length (https://vocab.ices.dk/?ref=18)
 
 filter(hlfleL, length_cm == 0) # No such thing
 
-bits_ca_fle <- bits_ca_fle |> 
-  drop_na(IndWgt) |> 
-  drop_na(LngtClass) |> 
-  filter(IndWgt > 0 & LngtClass > 0) |>  # Filter positive length and weight
-  mutate(weight_kg = IndWgt/1000) |> 
+bits_ca_fle <- bits_ca_fle %>% 
+  drop_na(IndWgt) %>% 
+  drop_na(LngtClass) %>% 
+  filter(IndWgt > 0 & LngtClass > 0) %>%  # Filter positive length and weight
+  mutate(weight_kg = IndWgt/1000) %>% 
   mutate(length_cm = ifelse(LngtCode == ".", 
                             LngtClass/10,
-                            LngtClass)) |> # Standardize length ((https://vocab.ices.dk/?ref=18))
-  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) |>
-  filter(keep == "Y") |> 
+                            LngtClass)) %>% # Standardize length ((https://vocab.ices.dk/?ref=18))
+  mutate(keep = ifelse(LngtCode == "." & Year == 2008, "N", "Y")) %>%
+  filter(keep == "Y") %>% 
   filter(length_cm < 70)
 
 # Now check if all rows where length is NA are the ones with zero catch!
-hlfleL |> 
+hlfleL %>% 
   mutate(length2 = replace_na(length_cm, -9),
-         no_length = ifelse(length2 < 0, "T", "F")) |> 
+         no_length = ifelse(length2 < 0, "T", "F")) %>% 
   ggplot(aes(length2, CPUEun, color = no_length)) + geom_point(alpha = 0.2) + facet_wrap(~no_length)
 
-hlfleL |> mutate(length2 = replace_na(length_cm, -9)) |> group_by(length2) |> distinct(CPUEun) |> arrange(CPUEun)
+hlfleL %>% mutate(length2 = replace_na(length_cm, -9)) %>% group_by(length2) %>% distinct(CPUEun) %>% arrange(CPUEun)
 
 # Right, so all hauls with zero catch have NA length_cm. I don't have any NA catches
-t <- hlfleL |> drop_na(CPUEun)
+t <- hlfleL %>% drop_na(CPUEun)
 # Well, 11 rows. I will remove them
-hlfleL <- hlfleL |> drop_na(CPUEun)
-t <- hlfleL |> filter(CPUEun == 0) |> distinct(length_cm)
-t <- hlfleL |> drop_na(length_cm)
+hlfleL <- hlfleL %>% drop_na(CPUEun)
+t <- hlfleL %>% filter(CPUEun == 0) %>% distinct(length_cm)
+t <- hlfleL %>% drop_na(length_cm)
 
 # In other words, a zero catch is when the catch is zero and length_cm is NA
 # In order to not get any NA CPUEs in unit biomass because length is NA (I want them instead
 # to be 0, as the numbers-CPUE is), I will replace length_cm == NA with length_cm == 0 before
 # calculating biomass cpue
-hlfleL <- hlfleL |> mutate(length_cm2 = replace_na(length_cm, 0))
+hlfleL <- hlfleL %>% mutate(length_cm2 = replace_na(length_cm, 0))
 
 # Standardize length in the haul-data and calculate weight
-hlfleL <- hlfleL |> 
-  mutate(weight_kg = (a*length_cm2^b)/1000) |> 
+hlfleL <- hlfleL %>% 
+  mutate(weight_kg = (a*length_cm2^b)/1000) %>% 
   mutate(CPUEun_kg = weight_kg*CPUEun)
 
 # Plot and check it's correct also in this data
@@ -1175,14 +1173,14 @@ ggplot(hlfleL, aes(weight_kg, length_cm2)) +
   facet_wrap(~Year)
 
 # Check
-t <- hlfleL |> drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
-t <- hlfleL |> filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
-t <- hlfleL |> drop_na(length_cm2) # Should be no NA
+t <- hlfleL %>% drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
+t <- hlfleL %>% filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
+t <- hlfleL %>% drop_na(length_cm2) # Should be no NA
 
 
 # Plaice
 # First standardize length to cm and then check how zero-catches are implemented at this stage
-hlplaL <- hlplaL |> 
+hlplaL <- hlplaL %>% 
   mutate(length_cm = ifelse(LngtCode %in% c(".", "0"), 
                             LngtClass/10,
                             LngtClass)) # Standardize length (https://vocab.ices.dk/?ref=18)
@@ -1190,26 +1188,26 @@ hlplaL <- hlplaL |>
 filter(hlplaL, length_cm == 0) # No such thing
 
 # Now check if all rows where length is NA are the ones with zero catch!
-hlplaL |> 
+hlplaL %>% 
   mutate(length2 = replace_na(length_cm, -9),
-         no_length = ifelse(length2 < 0, "T", "F")) |> 
+         no_length = ifelse(length2 < 0, "T", "F")) %>% 
   ggplot(aes(length2, CPUEun, color = no_length)) + geom_point(alpha = 0.2) + facet_wrap(~no_length)
 
-hlplaL |> mutate(length2 = replace_na(length_cm, -9)) |> group_by(length2) |> distinct(CPUEun) |> arrange(CPUEun)
+hlplaL %>% mutate(length2 = replace_na(length_cm, -9)) %>% group_by(length2) %>% distinct(CPUEun) %>% arrange(CPUEun)
 
 # Right, so all hauls with zero catch have NA length_cm. I don't have any NA catches (but I do)
-t <- hlplaL |> drop_na(CPUEun)
-hlplaL <- hlplaL |> drop_na(CPUEun)
+t <- hlplaL %>% drop_na(CPUEun)
+hlplaL <- hlplaL %>% drop_na(CPUEun)
 
 # In other words, a zero catch is when the catch is zero and length_cm is NA
 # In order to not get any NA CPUEs in unit biomass because length is NA (I want them instead
 # to be 0, as the numbers-CPUE is), I will replace length_cm == NA with length_cm == 0 before
 # calculating biomass cpue
-hlplaL <- hlplaL |> mutate(length_cm2 = replace_na(length_cm, 0))
+hlplaL <- hlplaL %>% mutate(length_cm2 = replace_na(length_cm, 0))
 
 # Standardize length in the haul-data and calculate weight
-hlplaL <- hlplaL |> 
-  mutate(weight_kg = (a*length_cm2^b)/1000) |> 
+hlplaL <- hlplaL %>% 
+  mutate(weight_kg = (a*length_cm2^b)/1000) %>% 
   mutate(CPUEun_kg = weight_kg*CPUEun)
 
 # Plot and check it's correct also in this data
@@ -1218,14 +1216,14 @@ ggplot(hlplaL, aes(weight_kg, length_cm2)) +
   facet_wrap(~Year)
 
 # Check
-t <- hlfleL |> drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
-t <- hlfleL |> filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
-t <- hlfleL |> drop_na(length_cm2) # Should be no NA
+t <- hlfleL %>% drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
+t <- hlfleL %>% filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
+t <- hlfleL %>% drop_na(length_cm2) # Should be no NA
 
 
 # Dab
 # First standardize length to cm and then check how zero-catches are implemented at this stage
-hldabL <- hldabL |> 
+hldabL <- hldabL %>% 
   mutate(length_cm = ifelse(LngtCode %in% c(".", "0"), 
                             LngtClass/10,
                             LngtClass)) # Standardize length (https://vocab.ices.dk/?ref=18)
@@ -1233,25 +1231,25 @@ hldabL <- hldabL |>
 filter(hldabL, length_cm == 0) # No such thing
 
 # Now check if all rows where length is NA are the ones with zero catch!
-hldabL |> 
+hldabL %>% 
   mutate(length2 = replace_na(length_cm, -9),
-         no_length = ifelse(length2 < 0, "T", "F")) |> 
+         no_length = ifelse(length2 < 0, "T", "F")) %>% 
   ggplot(aes(length2, CPUEun, color = no_length)) + geom_point(alpha = 0.2) + facet_wrap(~no_length)
 
-hldabL |> mutate(length2 = replace_na(length_cm, -9)) |> group_by(length2) |> distinct(CPUEun) |> arrange(CPUEun)
+hldabL %>% mutate(length2 = replace_na(length_cm, -9)) %>% group_by(length2) %>% distinct(CPUEun) %>% arrange(CPUEun)
 
 # Right, so all hauls with zero catch have NA length_cm. I don't have any NA catches
-t <- hldabL |> drop_na(CPUEun)
+t <- hldabL %>% drop_na(CPUEun)
 
 # In other words, a zero catch is when the catch is zero and length_cm is NA
 # In order to not get any NA CPUEs in unit biomass because length is NA (I want them instead
 # to be 0, as the numbers-CPUE is), I will replace length_cm == NA with length_cm == 0 before
 # calculating biomass cpue
-hldabL <- hldabL |> mutate(length_cm2 = replace_na(length_cm, 0))
+hldabL <- hldabL %>% mutate(length_cm2 = replace_na(length_cm, 0))
 
 # Standardize length in the haul-data and calculate weight
-hldabL <- hldabL |> 
-  mutate(weight_kg = (a*length_cm2^b)/1000) |> 
+hldabL <- hldabL %>% 
+  mutate(weight_kg = (a*length_cm2^b)/1000) %>% 
   mutate(CPUEun_kg = weight_kg*CPUEun)
 
 # Plot and check it's correct also in this data
@@ -1260,57 +1258,57 @@ ggplot(hldabL, aes(weight_kg, length_cm2)) +
   facet_wrap(~Year)
 
 # Check
-t <- hldabL |> drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
-t <- hldabL |> filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
-t <- hldabL |> drop_na(length_cm2) # Should be no NA
+t <- hldabL %>% drop_na(CPUEun_kg) # Should not have any NA in biomass-catch
+t <- hldabL %>% filter(CPUEun_kg == 0) # Should result in a few percent of rows (note this is not proportion of hauls, but rows)
+t <- hldabL %>% drop_na(length_cm2) # Should be no NA
 ```
 
 ```{r proportion of zero-catch hauls}
-cod_0plot <- hlcodL |>
-  group_by(haul.id, Year, Quarter) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
-  group_by(Year, Quarter, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+cod_0plot <- hlcodL %>%
+  group_by(haul.id, Year, Quarter) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
+  group_by(Year, Quarter, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_zero_catch_hauls = Y/(N+Y),
          species = "Cod") 
 
-fle_0plot <- hlfleL |>
-  group_by(haul.id, Year, Quarter) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
-  group_by(Year, Quarter, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+fle_0plot <- hlfleL %>%
+  group_by(haul.id, Year, Quarter) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
+  group_by(Year, Quarter, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_zero_catch_hauls = Y/(N+Y),
          species = "Flounder")
 
-pla_0plot <- hlplaL |>
-  group_by(haul.id, Year, Quarter) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
-  group_by(Year, Quarter, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+pla_0plot <- hlplaL %>%
+  group_by(haul.id, Year, Quarter) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
+  group_by(Year, Quarter, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_zero_catch_hauls = Y/(N+Y),
          species = "Plaice")
 
-dab_0plot <- hldabL |>
-  group_by(haul.id, Year, Quarter) |>
-  summarise(CPUEun_haul = sum(CPUEun)) |> 
-  ungroup() |> 
-  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) |> 
-  group_by(Year, Quarter, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+dab_0plot <- hldabL %>%
+  group_by(haul.id, Year, Quarter) %>%
+  summarise(CPUEun_haul = sum(CPUEun)) %>% 
+  ungroup() %>% 
+  mutate(zero_catch = ifelse(CPUEun_haul == 0, "Y", "N")) %>% 
+  group_by(Year, Quarter, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_zero_catch_hauls = Y/(N+Y),
          species = "Dab")
 ```
@@ -1324,32 +1322,32 @@ To get unit: kg of fish caught by trawling for 1 h a standard bottom swept area 
 # Remove hauls done with the TVL gear with a SweepLngt < 50 (these are calibration hauls, pers. com. Anders & Ale)
 # And also hauls without length-information
 # Remove pelagic gear
-hlcodL <- hlcodL |>
-  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) |> 
-  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) |> 
-  filter(keep == "Y") |> 
-  dplyr::select(-keep, -SweepLngt2) |> 
+hlcodL <- hlcodL %>%
+  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) %>% 
+  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) %>% 
+  filter(keep == "Y") %>% 
+  dplyr::select(-keep, -SweepLngt2) %>% 
   filter(!Gear == "PEL")
   
-hlfleL <- hlfleL |>
-  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) |> 
-  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) |> 
-  filter(keep == "Y") |> 
-  dplyr::select(-keep, -SweepLngt2) |> 
+hlfleL <- hlfleL %>%
+  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) %>% 
+  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) %>% 
+  filter(keep == "Y") %>% 
+  dplyr::select(-keep, -SweepLngt2) %>% 
   filter(!Gear == "PEL")
 
-hlplaL <- hlplaL |>
-  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) |> 
-  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) |> 
-  filter(keep == "Y") |> 
-  dplyr::select(-keep, -SweepLngt2) |> 
+hlplaL <- hlplaL %>%
+  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) %>% 
+  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) %>% 
+  filter(keep == "Y") %>% 
+  dplyr::select(-keep, -SweepLngt2) %>% 
   filter(!Gear == "PEL")
 
-hldabL <- hldabL |>
-  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) |> 
-  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) |> 
-  filter(keep == "Y") |> 
-  dplyr::select(-keep, -SweepLngt2) |> 
+hldabL <- hldabL %>%
+  mutate(SweepLngt2 = replace_na(SweepLngt, 50)) %>% 
+  mutate(keep = ifelse(Gear == "TVL" & SweepLngt2 < 50, "N", "Y")) %>% 
+  filter(keep == "Y") %>% 
+  dplyr::select(-keep, -SweepLngt2) %>% 
   filter(!Gear == "PEL")
 
 # Add in RS and RSA-values from the sweep file
@@ -1366,34 +1364,34 @@ hldabL <- hldabL |>
 # equation in Orio's spreadsheet
 
 # First I will join in the sweep data, 
-sweep_sel <- sweep |> rename("haul.id" = "ï..haul.id") |> dplyr::select(haul.id, RSA, RS)
+sweep_sel <- sweep %>% rename("haul.id" = "ï..haul.id") %>% dplyr::select(haul.id, RSA, RS)
 
 hlcodL2 <- left_join(hlcodL, sweep_sel)
 hlfleL2 <- left_join(hlfleL, sweep_sel)
 hlplaL2 <- left_join(hlplaL, sweep_sel)
 hldabL2 <- left_join(hldabL, sweep_sel)
 
-hlcodL2 <- hlcodL2 |>
+hlcodL2 <- hlcodL2 %>%
   rename("RS_sweep" = "RS",
-         "RSA_sweep" = "RSA") |> 
+         "RSA_sweep" = "RSA") %>% 
   mutate(RS_sweep = as.numeric(RS_sweep),
          RSA_sweep = as.numeric(RSA_sweep))
 
-hlfleL2 <- hlfleL2 |>
+hlfleL2 <- hlfleL2 %>%
   rename("RS_sweep" = "RS",
-         "RSA_sweep" = "RSA") |> 
+         "RSA_sweep" = "RSA") %>% 
   mutate(RS_sweep = as.numeric(RS_sweep),
          RSA_sweep = as.numeric(RSA_sweep))
 
-hlplaL2 <- hlplaL2 |>
+hlplaL2 <- hlplaL2 %>%
   rename("RS_sweep" = "RS",
-         "RSA_sweep" = "RSA") |> 
+         "RSA_sweep" = "RSA") %>% 
   mutate(RS_sweep = as.numeric(RS_sweep),
          RSA_sweep = as.numeric(RSA_sweep))
 
-hldabL2 <- hldabL2 |>
+hldabL2 <- hldabL2 %>%
   rename("RS_sweep" = "RS",
-         "RSA_sweep" = "RSA") |> 
+         "RSA_sweep" = "RSA") %>% 
   mutate(RS_sweep = as.numeric(RS_sweep),
          RSA_sweep = as.numeric(RSA_sweep))
 
@@ -1404,55 +1402,55 @@ sort(unique(hlcodL2$Fishing.line))
 sort(unique(hlcodL2$SweepLngt))
 
 # First replace -9 in the columns I use for the calculations with NA so I don't end up with real numbers that are wrong!
-hlcodL2 <- hlcodL2 |> mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
+hlcodL2 <- hlcodL2 %>% mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
                               Fishing.line = ifelse(Fishing.line == -9, NA, Fishing.line),
                               SweepLngt = ifelse(SweepLngt == -9, NA, SweepLngt))
 
-hlfleL2 <- hlfleL2 |> mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
+hlfleL2 <- hlfleL2 %>% mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
                               Fishing.line = ifelse(Fishing.line == -9, NA, Fishing.line),
                               SweepLngt = ifelse(SweepLngt == -9, NA, SweepLngt))
 
-hlplaL2 <- hlplaL2 |> mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
+hlplaL2 <- hlplaL2 %>% mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
                               Fishing.line = ifelse(Fishing.line == -9, NA, Fishing.line),
                               SweepLngt = ifelse(SweepLngt == -9, NA, SweepLngt))
 
-hldabL2 <- hldabL2 |> mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
+hldabL2 <- hldabL2 %>% mutate(GroundSpeed = ifelse(GroundSpeed == -9, NA, GroundSpeed),
                               Fishing.line = ifelse(Fishing.line == -9, NA, Fishing.line),
                               SweepLngt = ifelse(SweepLngt == -9, NA, SweepLngt))
 
 
-hlcodL2 |> filter(Quarter == 1) |>
-  distinct(GroundSpeed, Fishing.line, SweepLngt) |> as.data.frame() |> head(20)
+hlcodL2 %>% filter(Quarter == 1) %>%
+  distinct(GroundSpeed, Fishing.line, SweepLngt) %>% as.data.frame() %>% head(20)
 
-hlcodL2 |> filter(Quarter == 4) |>
-  distinct(GroundSpeed, Fishing.line, SweepLngt) |> as.data.frame() |> head(20)
+hlcodL2 %>% filter(Quarter == 4) %>%
+  distinct(GroundSpeed, Fishing.line, SweepLngt) %>% as.data.frame() %>% head(20)
 
 # Hmm, Q1 has at least one of the RS or RSA variables as NAs. Will be difficult to standardize!
 # Hope the correction factors are present in Ales conversion data
 
 # Now calculate correction factors
-hlcodL2 <- hlcodL2 |> mutate(RS_x = 3/GroundSpeed,
+hlcodL2 <- hlcodL2 %>% mutate(RS_x = 3/GroundSpeed,
                              Horizontal.opening..m. = Fishing.line*0.67,
                              Swep.one.side..after.formula...meter = 0.258819045*SweepLngt, # SIN(RADIANS(15))
                              Size.final..m = Horizontal.opening..m. + (Swep.one.side..after.formula...meter*2),
                              Swept.area = (Size.final..m*3*1860)/1000000,
                              RSA_x = 0.45388309675081/Swept.area)
 
-hlfleL2 <- hlfleL2 |> mutate(RS_x = 3/GroundSpeed,
+hlfleL2 <- hlfleL2 %>% mutate(RS_x = 3/GroundSpeed,
                              Horizontal.opening..m. = Fishing.line*0.67,
                              Swep.one.side..after.formula...meter = 0.258819045*SweepLngt, # SIN(RADIANS(15))
                              Size.final..m = Horizontal.opening..m. + (Swep.one.side..after.formula...meter*2),
                              Swept.area = (Size.final..m*3*1860)/1000000,
                              RSA_x = 0.45388309675081/Swept.area)
 
-hlplaL2 <- hlplaL2 |> mutate(RS_x = 3/GroundSpeed,
+hlplaL2 <- hlplaL2 %>% mutate(RS_x = 3/GroundSpeed,
                              Horizontal.opening..m. = Fishing.line*0.67,
                              Swep.one.side..after.formula...meter = 0.258819045*SweepLngt, # SIN(RADIANS(15))
                              Size.final..m = Horizontal.opening..m. + (Swep.one.side..after.formula...meter*2),
                              Swept.area = (Size.final..m*3*1860)/1000000,
                              RSA_x = 0.45388309675081/Swept.area)
 
-hldabL2 <- hldabL2 |> mutate(RS_x = 3/GroundSpeed,
+hldabL2 <- hldabL2 %>% mutate(RS_x = 3/GroundSpeed,
                              Horizontal.opening..m. = Fishing.line*0.67,
                              Swep.one.side..after.formula...meter = 0.258819045*SweepLngt, # SIN(RADIANS(15))
                              Size.final..m = Horizontal.opening..m. + (Swep.one.side..after.formula...meter*2),
@@ -1460,14 +1458,14 @@ hldabL2 <- hldabL2 |> mutate(RS_x = 3/GroundSpeed,
                              RSA_x = 0.45388309675081/Swept.area)
 
 # Check EQ. is correct by recalculating it in the sweep file
-sweep <- sweep |> mutate(Horizontal.opening..m.2 = Fishing.line*0.67,
+sweep <- sweep %>% mutate(Horizontal.opening..m.2 = Fishing.line*0.67,
                          Swep.one.side..after.formula...meter2 = 0.258819045*SweepLngt, # SIN(RADIANS(15))
                          Size.final..m2 = Horizontal.opening..m.2 + (Swep.one.side..after.formula...meter2*2),
                          Swept.area2 = (Size.final..m2*3*1860)/1000000,
                          RSA_x = 0.45388309675081/Swept.area2)
 
-sweep |>
-  drop_na() |>
+sweep %>%
+  drop_na() %>%
   ggplot(aes(as.numeric(RSA), RSA_x)) + geom_point() + geom_abline(intercept = 0, slope = 1)
 # Yes it's the same
 
@@ -1528,65 +1526,65 @@ p16 <- ggplot(hldabL2, aes(RSA_sweep)) + geom_histogram()
 # Why do I have RSA values smaller than one? (either because sweep length is longer or gear is larger (GOV))
 # Check if I can calculate the same RSA in sweep as that entered there.
 # Ok, so the equation is correct. Which ID's have RSA < 1?
-hlcodL2 |> 
-  filter(RSA_x < 1 & RSA_x > 0) |>
+hlcodL2 %>% 
+  filter(RSA_x < 1 & RSA_x > 0) %>%
   dplyr::select(Year, Country, Ship, Gear, haul.id, Horizontal.opening..m., Fishing.line,
-                Swep.one.side..after.formula...meter, SweepLngt, Size.final..m, Swept.area, RSA_x) |> 
+                Swep.one.side..after.formula...meter, SweepLngt, Size.final..m, Swept.area, RSA_x) %>% 
   ggplot(aes(RSA_x, fill = factor(SweepLngt))) + geom_histogram() + facet_wrap(~Gear, ncol = 1)
 
 # Check if I have more than one unique RS or RSA value per haul, or if it's "either this or that"
 # Filter positive in both columns
-hlcodL2 |> filter(RS_x > 0 & RS_sweep > 0) |> ggplot(aes(RS_x, RS_sweep)) +
+hlcodL2 %>% filter(RS_x > 0 & RS_sweep > 0) %>% ggplot(aes(RS_x, RS_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
-hlcodL2 |> filter(RSA_x > 0 & RSA_sweep > 0) |> ggplot(aes(RSA_x, RSA_sweep)) +
+hlcodL2 %>% filter(RSA_x > 0 & RSA_sweep > 0) %>% ggplot(aes(RSA_x, RSA_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
-hlfleL2 |> filter(RS_x > 0 & RS_sweep > 0) |> ggplot(aes(RS_x, RS_sweep)) +
+hlfleL2 %>% filter(RS_x > 0 & RS_sweep > 0) %>% ggplot(aes(RS_x, RS_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
-hlfleL2 |> filter(RSA_x > 0 & RSA_sweep > 0) |> ggplot(aes(RSA_x, RSA_sweep)) +
+hlfleL2 %>% filter(RSA_x > 0 & RSA_sweep > 0) %>% ggplot(aes(RSA_x, RSA_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
 # Ok, there's on odd RS_x that is larger than 3. It didn't catch anything and speed is 0.8! Will remove
-hlcodL2 <- hlcodL2 |> filter(RS_x < 3)
-hlfleL2 <- hlfleL2 |> filter(RS_x < 3)
+hlcodL2 <- hlcodL2 %>% filter(RS_x < 3)
+hlfleL2 <- hlfleL2 %>% filter(RS_x < 3)
 
 # Plot again
-hlcodL2 |> filter(RS_x > 0 & RS_sweep > 0) |> ggplot(aes(RS_x, RS_sweep)) +
+hlcodL2 %>% filter(RS_x > 0 & RS_sweep > 0) %>% ggplot(aes(RS_x, RS_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
-hlfleL2 |> filter(RS_x > 0 & RS_sweep > 0) |> ggplot(aes(RS_x, RS_sweep)) +
+hlfleL2 %>% filter(RS_x > 0 & RS_sweep > 0) %>% ggplot(aes(RS_x, RS_sweep)) +
   geom_point() + geom_abline(aes(intercept = 0, slope = 1), color = "red")
 
 # They are largely the same when they overlap. When they differ, I will use RS_sweep
 # Make a single RS and RSA column
 
 # Cod 
-hlcodL3 <- hlcodL2 |>
+hlcodL3 <- hlcodL2 %>%
   mutate(RS = -99,
          RS = ifelse(RS_sweep > 0, RS_sweep, RS),
-         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) |> # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
+         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) %>% # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
   mutate(RSA = -99,
          RSA = ifelse(RSA_sweep > 0, RSA_sweep, RSA),
-         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) |>
-  # filter(RS > 0) |>
-  # filter(RSA > 0) |> 
+         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) %>%
+  # filter(RS > 0) %>%
+  # filter(RSA > 0) %>% 
   mutate(RSRSA = RS*RSA)
 
 # Note, here I deviate from Orio (2017) and Lindmark (2022) and instead of removing
 # NA values, I replace them with the mean by country and gear, following Smolinsky XXXX
-hlcodL3 <- hlcodL3 |>
+hlcodL3 <- hlcodL3 %>%
   mutate(RS = ifelse(RS < 0, NA, RS),
-         RSA = ifelse(RSA < 0, NA, RSA)) |> 
+         RSA = ifelse(RSA < 0, NA, RSA)) %>% 
   mutate(RSRSA = RS*RSA)
 
-RSRSAmean <- hlcodL3 |>
-  group_by(Country, Gear) |>
+RSRSAmean <- hlcodL3 %>%
+  group_by(Country, Gear) %>%
   summarise(RSRSAmean = mean(RSRSA, na.rm = T))
 
-hlcodL3 <- hlcodL3 |>
-  left_join(RSRSAmean) |>
+hlcodL3 <- hlcodL3 %>%
+  left_join(RSRSAmean) %>%
   mutate(RSRSAimputed = ifelse(is.na(RSRSA), 1, 0),
          RSRSA = ifelse(is.na(RSRSA), RSRSAmean, RSRSA))
 
@@ -1595,32 +1593,32 @@ ggplot(hlcodL3, aes(RSRSA)) + geom_histogram()
 
 
 # Flounder 
-hlfleL2 |> filter(Country == "LAT") |> distinct(Year) |> arrange(Year)
+hlfleL2 %>% filter(Country == "LAT") %>% distinct(Year) %>% arrange(Year)
 
-hlfleL3 <- hlfleL2 |>
+hlfleL3 <- hlfleL2 %>%
   mutate(RS = -999,
          RS = ifelse(RS_sweep > 0, RS_sweep, RS),
-         RS = ifelse(RS < 0, RS_x, RS)) |> # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
+         RS = ifelse(RS < 0, RS_x, RS)) %>% # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
   mutate(RSA = -999,
          RSA = ifelse(RSA_sweep > 0, RSA_sweep, RSA),
-         RSA = ifelse(RSA < 0, RSA_x, RSA)) |> 
-  #filter(RS > 0) |>
-  #filter(RSA > 0) |> 
+         RSA = ifelse(RSA < 0, RSA_x, RSA)) %>% 
+  #filter(RS > 0) %>%
+  #filter(RSA > 0) %>% 
   mutate(RSRSA = RS*RSA)
 
 # Note, here I deviate from Orio (2017) and Lindmark (2022) and instead of removing
 # NA values, I replace them with the mean by country and gear, following Smolinsky XXXX
-hlfleL3 <- hlfleL3 |>
+hlfleL3 <- hlfleL3 %>%
   mutate(RS = ifelse(RS < 0, NA, RS),
-         RSA = ifelse(RSA < 0, NA, RSA)) |> 
+         RSA = ifelse(RSA < 0, NA, RSA)) %>% 
   mutate(RSRSA = RS*RSA)
 
-RSRSAmean <- hlfleL3 |>
-  group_by(Country, Gear) |>
+RSRSAmean <- hlfleL3 %>%
+  group_by(Country, Gear) %>%
   summarise(RSRSAmean = mean(RSRSA, na.rm = T))
 
-hlfleL3 <- hlfleL3 |>
-  left_join(RSRSAmean) |>
+hlfleL3 <- hlfleL3 %>%
+  left_join(RSRSAmean) %>%
   mutate(RSRSAimputed = ifelse(is.na(RSRSA), 1, 0),
          RSRSA = ifelse(is.na(RSRSA), RSRSAmean, RSRSA))
 
@@ -1628,49 +1626,49 @@ hlfleL3 <- hlfleL3 |>
 ggplot(hlfleL3, aes(RSRSA)) + geom_histogram()
 
 # Test how many years of LAT data I miss out on because I can't standardize it.
-# hlfleL2 |>
+# hlfleL2 %>%
 #   mutate(RS = -999,
 #          RS = ifelse(RS_sweep > 0, RS_sweep, RS),
-#          RS = ifelse(RS < 0, RS_x, RS)) |> # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
-#   filter(RS > 0) |> 
-#   filter(Country == "LAT") |> 
-#   distinct(Year) |> 
+#          RS = ifelse(RS < 0, RS_x, RS)) %>% # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
+#   filter(RS > 0) %>% 
+#   filter(Country == "LAT") %>% 
+#   distinct(Year) %>% 
 #   arrange(Year)
 #   
-# hlfleL2 |>
+# hlfleL2 %>%
 #   mutate(RSA = -999,
 #          RSA = ifelse(RSA_sweep > 0, RSA_sweep, RSA),
-#          RSA = ifelse(RSA < 0, RSA_x, RSA)) |> 
-#   filter(RSA > 0) |> 
-#   filter(Country == "LAT") |> 
-#   distinct(Year) |> 
+#          RSA = ifelse(RSA < 0, RSA_x, RSA)) %>% 
+#   filter(RSA > 0) %>% 
+#   filter(Country == "LAT") %>% 
+#   distinct(Year) %>% 
 #   arrange(Year)
 
 # Plaice 
-hlplaL3 <- hlplaL2 |>
+hlplaL3 <- hlplaL2 %>%
   mutate(RS = -99,
          RS = ifelse(RS_sweep > 0, RS_sweep, RS),
-         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) |> # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
+         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) %>% # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
   mutate(RSA = -99,
          RSA = ifelse(RSA_sweep > 0, RSA_sweep, RSA),
-         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) |>
-  # filter(RS > 0) |>
-  # filter(RSA > 0) |> 
+         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) %>%
+  # filter(RS > 0) %>%
+  # filter(RSA > 0) %>% 
   mutate(RSRSA = RS*RSA)
 
 # Note, here I deviate from Orio (2017) and Lindmark (2022) and instead of removing
 # NA values, I replace them with the mean by country and gear, following Smolinsky XXXX
-hlplaL3 <- hlplaL3 |>
+hlplaL3 <- hlplaL3 %>%
   mutate(RS = ifelse(RS < 0, NA, RS),
-         RSA = ifelse(RSA < 0, NA, RSA)) |> 
+         RSA = ifelse(RSA < 0, NA, RSA)) %>% 
   mutate(RSRSA = RS*RSA)
 
-RSRSAmean <- hlplaL3 |>
-  group_by(Country, Gear) |>
+RSRSAmean <- hlplaL3 %>%
+  group_by(Country, Gear) %>%
   summarise(RSRSAmean = mean(RSRSA, na.rm = T))
 
-hlplaL3 <- hlplaL3 |>
-  left_join(RSRSAmean) |>
+hlplaL3 <- hlplaL3 %>%
+  left_join(RSRSAmean) %>%
   mutate(RSRSAimputed = ifelse(is.na(RSRSA), 1, 0),
          RSRSA = ifelse(is.na(RSRSA), RSRSAmean, RSRSA))
 
@@ -1679,30 +1677,30 @@ ggplot(hlplaL3, aes(RSRSA)) + geom_histogram()
 
 
 # Dab 
-hldabL3 <- hldabL2 |>
+hldabL3 <- hldabL2 %>%
   mutate(RS = -99,
          RS = ifelse(RS_sweep > 0, RS_sweep, RS),
-         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) |> # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
+         RS = ifelse(RS < 0 & RS_x > 0, RS_x, RS)) %>% # Note that there are no NA i RS_x. This replaces all non-RS_sweep values -0.3, so I can filter positive later
   mutate(RSA = -99,
          RSA = ifelse(RSA_sweep > 0, RSA_sweep, RSA),
-         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) |>
-  # filter(RS > 0) |>
-  # filter(RSA > 0) |> 
+         RSA = ifelse(RSA < 0 & RSA_x > 0, RSA_x, RSA)) %>%
+  # filter(RS > 0) %>%
+  # filter(RSA > 0) %>% 
   mutate(RSRSA = RS*RSA)
 
 # Note, here I deviate from Orio (2017) and Lindmark (2022) and instead of removing
 # NA values, I replace them with the mean by country and gear, following Smolinsky XXXX
-hldabL3 <- hldabL3 |>
+hldabL3 <- hldabL3 %>%
   mutate(RS = ifelse(RS < 0, NA, RS),
-         RSA = ifelse(RSA < 0, NA, RSA)) |> 
+         RSA = ifelse(RSA < 0, NA, RSA)) %>% 
   mutate(RSRSA = RS*RSA)
 
-RSRSAmean <- hldabL3 |>
-  group_by(Country, Gear) |>
+RSRSAmean <- hldabL3 %>%
+  group_by(Country, Gear) %>%
   summarise(RSRSAmean = mean(RSRSA, na.rm = T))
 
-hldabL3 <- hldabL3 |>
-  left_join(RSRSAmean) |>
+hldabL3 <- hldabL3 %>%
+  left_join(RSRSAmean) %>%
   mutate(RSRSAimputed = ifelse(is.na(RSRSA), 1, 0),
          RSRSA = ifelse(is.na(RSRSA), RSRSAmean, RSRSA))
 
@@ -1711,19 +1709,19 @@ ggplot(hldabL3, aes(RSRSA)) + geom_histogram()
 
 
 # Standardize!
-hlcodL3 <- hlcodL3 |>
+hlcodL3 <- hlcodL3 %>%
   mutate(CPUEst_kg = CPUEun_kg*RS*RSA,
          CPUEst = CPUEun*RS*RSA)
 
-hlfleL3 <- hlfleL3 |>
+hlfleL3 <- hlfleL3 %>%
   mutate(CPUEst_kg = CPUEun_kg*RS*RSA,
          CPUEst = CPUEun*RS*RSA)
 
-hlplaL3 <- hlplaL3 |>
+hlplaL3 <- hlplaL3 %>%
   mutate(CPUEst_kg = CPUEun_kg*RS*RSA,
          CPUEst = CPUEun*RS*RSA)
   
-hldabL3 <- hldabL3 |>
+hldabL3 <- hldabL3 %>%
   mutate(CPUEst_kg = CPUEun_kg*RS*RSA,
          CPUEst = CPUEun*RS*RSA)
 
@@ -1734,7 +1732,7 @@ min(hlcodL3$CPUEst_kg)
 min(hlcodL3$CPUEst)
 
 unique(is.na(hlfleL3$CPUEst_kg)) # Remove the few NA's here
-hlfleL3 <- hlfleL3 |> drop_na(CPUEst_kg)
+hlfleL3 <- hlfleL3 %>% drop_na(CPUEst_kg)
 unique(is.na(hlfleL3$CPUEst))
 min(hlfleL3$CPUEst_kg) 
 min(hlfleL3$CPUEst)
@@ -1761,7 +1759,7 @@ p1/p2
 
 
 # Cod
-hlcodhaul <- hlcodL3 |>
+hlcodhaul <- hlcodL3 %>%
   mutate(cpue_kg = CPUEst_kg,
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
@@ -1770,7 +1768,7 @@ hlcodhaul <- hlcodL3 |>
          density_ab = cpue/0.45)
 
 # Flounder
-hlflehaul <- hlfleL3 |>
+hlflehaul <- hlfleL3 %>%
   mutate(cpue_kg = CPUEst_kg,
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
@@ -1779,7 +1777,7 @@ hlflehaul <- hlfleL3 |>
          density_ab = cpue/0.45)
 
 # Plaice
-hlplahaul <- hlplaL3 |>
+hlplahaul <- hlplaL3 %>%
   mutate(cpue_kg = CPUEst_kg,
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
@@ -1788,7 +1786,7 @@ hlplahaul <- hlplaL3 |>
          density_ab = cpue/0.45)
 
 # Dab
-hldabhaul <- hldabL3 |>
+hldabhaul <- hldabL3 %>%
   mutate(cpue_kg = CPUEst_kg,
          cpue = CPUEst,
          cpue_kg_un = CPUEun_kg,
@@ -1797,79 +1795,79 @@ hldabhaul <- hldabL3 |>
          density_ab = cpue/0.45)
 
 # First, figure out why I have length = 0 and density = 0 when I have other lengths in the haul
-hlcodhaul |> filter(haul.id == "1993:1:GFR:SOL:H20:23:31") |> as.data.frame()
+hlcodhaul %>% filter(haul.id == "1993:1:GFR:SOL:H20:23:31") %>% as.data.frame()
 
-hlcodhaul |>
-  group_by(haul.id) |> 
-  mutate(no_catches = length(unique(CPUEun))) |> 
-  filter(any(CPUEun == 0)) |> 
-  filter(no_catches > 1) |> 
-  as.data.frame() |> 
+hlcodhaul %>%
+  group_by(haul.id) %>% 
+  mutate(no_catches = length(unique(CPUEun))) %>% 
+  filter(any(CPUEun == 0)) %>% 
+  filter(no_catches > 1) %>% 
+  as.data.frame() %>% 
   head(20)
 
-hlcodhaul |> 
-  group_by(haul.id) |> 
-  filter(CPUEun == min(CPUEun)) |> 
-  ungroup() |> 
+hlcodhaul %>% 
+  group_by(haul.id) %>% 
+  filter(CPUEun == min(CPUEun)) %>% 
+  ungroup() %>% 
   distinct(CPUEun)
 
 # The minimum CPUE in all hauls is always zero at this stage. It doesn't really matter because I calculate haul-level CPUE by grouping by ID's and summing. 
 
 # Rename columns and select specific columns from the cod data
 # Cod
-datcod <- hlcodhaul |>
-  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) |> 
+datcod <- hlcodhaul %>%
+  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) %>% 
   rename(year = Year,
          month = Month,
          lat = ShootLat,
          lon = ShootLong,
          quarter = Quarter,
          ices_rect = Rect,
-         length_cm = length_cm2) |> 
+         length_cm = length_cm2) %>% 
   mutate(species = "cod")
 
 # Flounder
-datfle <- hlflehaul |>
-  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) |> 
+datfle <- hlflehaul %>%
+  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) %>% 
   rename(year = Year,
          month = Month,
          lat = ShootLat,
          lon = ShootLong,
          quarter = Quarter,
          ices_rect = Rect,
-         length_cm = length_cm2) |> 
+         length_cm = length_cm2) %>% 
   mutate(species = "flounder")
 
 # Plaice
-datpla <- hlplahaul |>
-  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) |> 
+datpla <- hlplahaul %>%
+  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) %>% 
   rename(year = Year,
          month = Month,
          lat = ShootLat,
          lon = ShootLong,
          quarter = Quarter,
          ices_rect = Rect,
-         length_cm = length_cm2) |> 
+         length_cm = length_cm2) %>% 
   mutate(species = "plaice")
 
 # Dab
-datdab <- hldabhaul |>
-  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) |> 
+datdab <- hldabhaul %>%
+  dplyr::select(density, Year, ShootLat, ShootLong, Quarter, Country, Month, haul.id, IDx, Rect, sub_div, length_cm2, depth_obs) %>% 
   rename(year = Year,
          month = Month,
          lat = ShootLat,
          lon = ShootLong,
          quarter = Quarter,
          ices_rect = Rect,
-         length_cm = length_cm2) |> 
+         length_cm = length_cm2) %>% 
   mutate(species = "dab")
 ```
 
 ```{r very long data with all combinations of size and haul id}
 # Because it's size-based cpue, I want the data frame to be "full", so that each haul has every size, even if all are empty. That means I can define a size group, group by and sum for each haul, even if there aren't any sizes caught. Now I only have lengths with catches, and no lengths if catch is zero.
-datcod |> group_by(haul.id) |> summarise(n_size = length(unique(length_cm))) |> distinct(n_size, .keep_all = TRUE)
-datcod |> filter(haul.id == "1993:1:GFR:SOL:H20:23:31") |> as.data.frame()
-datcod |> group_by(haul.id) |> mutate(tot_dens = sum(density)) |> ungroup() |> distinct(haul.id, .keep_all = TRUE) |> filter(tot_dens == 0)
+datcod %>% group_by(haul.id) %>% summarise(n_size = length(unique(length_cm))) %>% distinct(n_size, .keep_all = TRUE)
+datcod %>% filter(haul.id == "1993:1:GFR:SOL:H20:23:31") %>% as.data.frame()
+datcod %>% group_by(haul.id) %>% mutate(tot_dens = sum(density)) %>% ungroup() %>% distinct(haul.id, .keep_all = TRUE) %>% filter(tot_dens == 0)
 
 # Create a data frame with all combinations of trawl IDs and lengths
 ex_df <- data.frame(expand.grid(
@@ -1882,38 +1880,38 @@ ex_df$haul.id.size <- paste(ex_df$haul.id, ex_df$length_cm, sep = ".")
 datcod$haul.id.size <- paste(datcod$haul.id, datcod$length_cm, sep = ".")
 
 # Remove IDs that are already in datcod
-ex_df <- ex_df |> filter(!haul.id.size %in% unique(datcod$haul.id.size)) 
+ex_df <- ex_df %>% filter(!haul.id.size %in% unique(datcod$haul.id.size)) 
 
 # Add in the other columns besides density and length
-dat_for_join <- datcod |> dplyr::select(-density, -length_cm, -haul.id.size) |> distinct(haul.id, .keep_all = TRUE)
+dat_for_join <- datcod %>% dplyr::select(-density, -length_cm, -haul.id.size) %>% distinct(haul.id, .keep_all = TRUE)
 
 ex_df <- left_join(ex_df, dat_for_join, by = "haul.id")
 
-datcod |> filter(haul.id.size %in% ex_df$haul.id.size)
+datcod %>% filter(haul.id.size %in% ex_df$haul.id.size)
 
 # Bind_rows these data with datcod
 nrow(datcod) + nrow(ex_df)
 
 unique(is.na(datcod$density))
 
-datcod <- bind_rows(datcod, ex_df) |> arrange(haul.id, length_cm)
+datcod <- bind_rows(datcod, ex_df) %>% arrange(haul.id, length_cm)
 nrow(datcod)
 datcod
 
 # Replace NA density with 0 density because that's the added length-classes not previously in the catch data
-datcod <- datcod |> mutate(density = replace_na(density, 0))
+datcod <- datcod %>% mutate(density = replace_na(density, 0))
 
 # Check the proportion zeroes are still correct:
-t <- datcod |>
-  group_by(haul.id) |>
-  summarise(haul_density = sum(density)) |> 
+t <- datcod %>%
+  group_by(haul.id) %>%
+  summarise(haul_density = sum(density)) %>% 
   ungroup()
 
 nrow(datcod)
 length(unique(datcod$haul.id))
-t |> drop_na(haul_density)
+t %>% drop_na(haul_density)
 nrow(t)
-t |> filter(!haul_density == 0)
+t %>% filter(!haul_density == 0)
 
 
 # Flounder
@@ -1928,18 +1926,18 @@ ex_df$haul.id.size <- paste(ex_df$haul.id, ex_df$length_cm, sep = ".")
 datfle$haul.id.size <- paste(datfle$haul.id, datfle$length_cm, sep = ".")
 
 # Remove IDs that are already in datfle
-ex_df <- ex_df |> filter(!haul.id.size %in% unique(datfle$haul.id.size)) 
+ex_df <- ex_df %>% filter(!haul.id.size %in% unique(datfle$haul.id.size)) 
 
 # Add in the other columns besides density and length
-dat_for_join <- datfle |> dplyr::select(-density, -length_cm, -haul.id.size) |> distinct(haul.id, .keep_all = TRUE)
+dat_for_join <- datfle %>% dplyr::select(-density, -length_cm, -haul.id.size) %>% distinct(haul.id, .keep_all = TRUE)
 
 ex_df <- left_join(ex_df, dat_for_join, by = "haul.id")
 
 # Bind_rows these data with datfle
-datfle <- bind_rows(datfle, ex_df) |> arrange(haul.id, length_cm)
+datfle <- bind_rows(datfle, ex_df) %>% arrange(haul.id, length_cm)
 
 # Replace NA density with 0 density because that's the added length-classes not previously in the catch data
-datfle <- datfle |> mutate(density = replace_na(density, 0))
+datfle <- datfle %>% mutate(density = replace_na(density, 0))
 
 
 # Plaice
@@ -1954,18 +1952,18 @@ ex_df$haul.id.size <- paste(ex_df$haul.id, ex_df$length_cm, sep = ".")
 datpla$haul.id.size <- paste(datpla$haul.id, datpla$length_cm, sep = ".")
 
 # Remove IDs that are already in datpla
-ex_df <- ex_df |> filter(!haul.id.size %in% unique(datpla$haul.id.size)) 
+ex_df <- ex_df %>% filter(!haul.id.size %in% unique(datpla$haul.id.size)) 
 
 # Add in the other columns besides density and length
-dat_for_join <- datpla |> dplyr::select(-density, -length_cm, -haul.id.size) |> distinct(haul.id, .keep_all = TRUE)
+dat_for_join <- datpla %>% dplyr::select(-density, -length_cm, -haul.id.size) %>% distinct(haul.id, .keep_all = TRUE)
 
 ex_df <- left_join(ex_df, dat_for_join, by = "haul.id")
 
 # Bind_rows these data with datpla
-datpla <- bind_rows(datpla, ex_df) |> arrange(haul.id, length_cm)
+datpla <- bind_rows(datpla, ex_df) %>% arrange(haul.id, length_cm)
 
 # Replace NA density with 0 density because that's the added length-classes not previously in the catch data
-datpla <- datpla |> mutate(density = replace_na(density, 0))
+datpla <- datpla %>% mutate(density = replace_na(density, 0))
 
 
 # Dab
@@ -1980,18 +1978,18 @@ ex_df$haul.id.size <- paste(ex_df$haul.id, ex_df$length_cm, sep = ".")
 datdab$haul.id.size <- paste(datdab$haul.id, datdab$length_cm, sep = ".")
 
 # Remove IDs that are already in datdab
-ex_df <- ex_df |> filter(!haul.id.size %in% unique(datdab$haul.id.size)) 
+ex_df <- ex_df %>% filter(!haul.id.size %in% unique(datdab$haul.id.size)) 
 
 # Add in the other columns besides density and length
-dat_for_join <- datdab |> dplyr::select(-density, -length_cm, -haul.id.size) |> distinct(haul.id, .keep_all = TRUE)
+dat_for_join <- datdab %>% dplyr::select(-density, -length_cm, -haul.id.size) %>% distinct(haul.id, .keep_all = TRUE)
 
 ex_df <- left_join(ex_df, dat_for_join, by = "haul.id")
 
 # Bind_rows these data with datdab
-datdab <- bind_rows(datdab, ex_df) |> arrange(haul.id, length_cm)
+datdab <- bind_rows(datdab, ex_df) %>% arrange(haul.id, length_cm)
 
 # Replace NA density with 0 density because that's the added length-classes not previously in the catch data
-datdab <- datdab |> mutate(density = replace_na(density, 0))
+datdab <- datdab %>% mutate(density = replace_na(density, 0))
 
 # Merge all species data
 dat <- bind_rows(datcod, datfle, datpla, datdab)
@@ -1999,27 +1997,27 @@ dat <- bind_rows(datcod, datfle, datpla, datdab)
 glimpse(dat)
 
 # Check proportion zeroes
-q1 <- dat |> 
-  filter(quarter == 1) |> 
-  group_by(species, haul.id) |> 
-  mutate(zero_catch = ifelse(sum(density) == 0, "Y", "N")) |> 
-  ungroup() |> 
-  group_by(year, species, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+q1 <- dat %>% 
+  filter(quarter == 1) %>% 
+  group_by(species, haul.id) %>% 
+  mutate(zero_catch = ifelse(sum(density) == 0, "Y", "N")) %>% 
+  ungroup() %>% 
+  group_by(year, species, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_z = Y / (N+Y), 
          q = 1)  
 
-q4 <- dat |> 
-  filter(quarter == 4) |> 
-  group_by(species, haul.id) |> 
-  mutate(zero_catch = ifelse(sum(density) == 0, "Y", "N")) |> 
-  ungroup() |> 
-  group_by(year, species, zero_catch) |> 
-  summarise(n = n()) |> 
-  ungroup() |> 
-  pivot_wider(names_from = zero_catch, values_from = n) |> 
+q4 <- dat %>% 
+  filter(quarter == 4) %>% 
+  group_by(species, haul.id) %>% 
+  mutate(zero_catch = ifelse(sum(density) == 0, "Y", "N")) %>% 
+  ungroup() %>% 
+  group_by(year, species, zero_catch) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = zero_catch, values_from = n) %>% 
   mutate(prop_z = Y / (N+Y), 
          q = 4)  
 
@@ -2032,11 +2030,11 @@ ggplot(bind_rows(q1, q4), aes(year, prop_z*100, color = factor(q))) +
 
 ```{r add env vars}
 # Only need 1 row per haul
-dat <- dat |>
+dat <- dat %>%
   mutate(month_year = paste(month, year, sep = "_"))
   
-dat_haul <- dat |> 
-  distinct(haul.id, .keep_all = TRUE) |>
+dat_haul <- dat %>% 
+  distinct(haul.id, .keep_all = TRUE) %>%
   dplyr::select(lat, lon, year, month, quarter, month_year)
 ```
 
@@ -2152,7 +2150,7 @@ for(i in dat_haul_month_year) {
   plot(r, main = paste(i), ylim = c(ymin, ymax), xlim = c(xmin, xmax))
 
   # Filter the same year (i) in the cpue data and select only coordinates
-  d_slice <- dat_haul |> filter(month_year == i) |> dplyr::select(lon, lat)
+  d_slice <- dat_haul %>% filter(month_year == i) %>% dplyr::select(lon, lat)
   
   # Make into a SpatialPoints object
   data_sp <- SpatialPoints(d_slice)
@@ -2291,7 +2289,7 @@ for(i in dat_haul_month_year) {
   plot(r, main = paste(i), ylim = c(ymin, ymax), xlim = c(xmin, xmax))
   
   # Filter the same year (i) in the cpue data and select only coordinates
-  d_slice <- dat_haul |> filter(month_year == i) |> dplyr::select(lon, lat)
+  d_slice <- dat_haul %>% filter(month_year == i) %>% dplyr::select(lon, lat)
   
   # Make into a SpatialPoints object
   data_sp <- SpatialPoints(d_slice)
@@ -2422,7 +2420,7 @@ for(i in dat_haul_month_year) {
   plot(r, main = paste(i), ylim = c(ymin, ymax), xlim = c(xmin, xmax))
   
   # Filter the same year (i) in the cpue data and select only coordinates
-  d_slice <- dat_haul |> filter(month_year == i) |> dplyr::select(lon, lat)
+  d_slice <- dat_haul %>% filter(month_year == i) %>% dplyr::select(lon, lat)
   
   # Make into a SpatialPoints object
   data_sp <- SpatialPoints(d_slice)
@@ -2450,7 +2448,7 @@ big_dat_sal <- dplyr::bind_rows(sal_data_list)
 ```
 
 ```{r merge oxygen temp and salinity data with fish data}
-env_dat <- left_join(big_dat_oxy, big_dat_temp, by = c("month_year", "lon", "lat")) |> 
+env_dat <- left_join(big_dat_oxy, big_dat_temp, by = c("month_year", "lon", "lat")) %>% 
   left_join(big_dat_sal, by = c("month_year", "lon", "lat"))
 ```
 
@@ -2465,7 +2463,7 @@ dep_raster <- terra::rast(paste0(home, "/data/Mean depth natural colour (with la
 class(dep_raster)
 plot(dep_raster)
 
-env_dat$depth <- terra::extract(dep_raster, env_dat |> dplyr::select(lon, lat))$elevation
+env_dat$depth <- terra::extract(dep_raster, env_dat %>% dplyr::select(lon, lat))$elevation
 
 ggplot(env_dat, aes(lon, lat, color = depth*-1)) + 
   geom_point() + 
@@ -2477,39 +2475,39 @@ env_dat$depth <- env_dat$depth*-1
 #### Substrate
 
 ```{r substrate}
-substrate <- terra::rast(paste0(home, "/data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif"))
-
-newcrs <- "+proj=longlat +datum=WGS84"
-
-substrate_longlat = terra::project(substrate, newcrs)
- 
-plot(substrate_longlat)
-
-# Now extract the values from the saduria raster to dat
-env_dat$substrate <- terra::extract(substrate_longlat, env_dat |> dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
-
-unique(env_dat$substrate)
-
-factor(sort(unique(round(env_dat$substrate))))
- 
-env_dat$substrate <- round(env_dat$substrate)
-
-env_dat <- env_dat |> mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
-                             substrate = ifelse(substrate == 2, "hard-bottom complex",
-                                                substrate),
-                             substrate = ifelse(substrate == 3, "sand", substrate),
-                             substrate = ifelse(substrate == 4, "hard clay", substrate),
-                             substrate = ifelse(substrate == 5, "mud", substrate))
-
-# I. Bedrock.
-# II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
-# III. Sand including fine to coarse sand (with gravel exposures).
-# IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
-# V. Mud including gyttja-clay to gyttja-silt.
-
-# Plot
-ggplot(env_dat, aes(lon, lat, color = substrate)) +
-  geom_point()
+# substrate <- terra::rast(paste0(home, "/data/substrate_tif/BALANCE_SEABED_SEDIMENT.tif"))
+# 
+# newcrs <- "+proj=longlat +datum=WGS84"
+# 
+# substrate_longlat = terra::project(substrate, newcrs)
+#  
+# plot(substrate_longlat)
+# 
+# # Now extract the values from the saduria raster to dat
+# env_dat$substrate <- terra::extract(substrate_longlat, env_dat %>% dplyr::select(lon, lat))$BALANCE_SEABED_SEDIMENT
+# 
+# unique(env_dat$substrate)
+# 
+# factor(sort(unique(round(env_dat$substrate))))
+#  
+# env_dat$substrate <- round(env_dat$substrate)
+# 
+# env_dat <- env_dat %>% mutate(substrate = ifelse(substrate == 1, "bedrock", substrate),
+#                              substrate = ifelse(substrate == 2, "hard-bottom complex",
+#                                                 substrate),
+#                              substrate = ifelse(substrate == 3, "sand", substrate),
+#                              substrate = ifelse(substrate == 4, "hard clay", substrate),
+#                              substrate = ifelse(substrate == 5, "mud", substrate))
+# 
+# # I. Bedrock.
+# # II. Hard bottom complex, includes patchy hard surfaces and coarse sand (sometimes also clay) to boulders.
+# # III. Sand including fine to coarse sand (with gravel exposures).
+# # IV. Hard clay sometimes/often/possibly exposed or covered with a thin layer of sand/gravel.
+# # V. Mud including gyttja-clay to gyttja-silt.
+# 
+# # Plot
+# ggplot(env_dat, aes(lon, lat, color = substrate)) +
+#   geom_point()
 ```
 
 ```{r join}
@@ -2521,14 +2519,14 @@ dat_full <- left_join(dat, env_dat, by = c("month_year", "lon", "lat"))
 
 ```{r add coords}
 # Add UTM coords
-dat_full <- dat_full |> add_utm_columns(ll_names = c("lon", "lat"))
+dat_full <- dat_full %>% add_utm_columns(ll_names = c("lon", "lat"))
 ```
 
 ## Save data
 
 ```{r save}
-dat_full_save <- dat_full |>
-  dplyr::select(-IDx, -haul.id.size) |> 
+dat_full_save <- dat_full %>%
+  dplyr::select(-IDx, -haul.id.size) %>% 
   janitor::clean_names()
 
 write_csv(dat_full_save, file = paste0(home, "/data/clean/catch_by_length.csv"))
