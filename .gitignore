@@ -54,6 +54,8 @@ data/NEMO_Nordic_SCOBI
 data/substrate_tif/
 
 data/clean/catch_by_length.csv
+data/clean/pred_grid_(1_2).csv
+data/clean/pred_grid_(2_2).csv
 
 # Output
 output/
@@ -79,6 +81,9 @@ data/Mean depth natural colour (with land).nc
 R/supp-analysis/*.html
 R/supp-analysis/*.R
 R/supp-analysis/*.rds
+
+R/prepare-data/03-make-pred-grid.html
+R/prepare-data/01-collate-cpue-data-exchange.html
 
 # Old scripts & data
 old/
