@@ -58,6 +58,12 @@ data/clean/catch_by_length.csv
 # Output
 output/
 
+# Meetings
+meetings/
+
+# text
+text/
+
 # Extra material
 VoCC_Tutorial.pdf
 
@@ -68,8 +74,14 @@ figures/supp/qq_density_sdm/
 data/Mean depth natural colour (with land).nc
 
 # Meetings
-meetings/
 
-# Old scripts
-OLD_*/
-EXTRA_*/
+# Supporting files html
+R/supp-analysis/*.html
+R/supp-analysis/*.R
+R/supp-analysis/*.rds
+
+# Old scripts & data
+old/
+
+# Old scripts & data
+data/NEMO/
