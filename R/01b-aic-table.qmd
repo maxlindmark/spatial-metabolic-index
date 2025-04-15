@@ -21,16 +21,14 @@ editor: source
 #| message: false
 #| warning: false
 
-# Load libraries, install if needed
-pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "kableExtra", "here") 
-
-if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
-
-    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
-  
-  }
-
-invisible(lapply(pkgs, library, character.only = T))
+library(tidyverse)
+library(readxl)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(kableExtra)
+library(here)
+library(ggsidekick); theme_set(theme_sleek())
 
 # Set path
 home <- here::here()
@@ -39,27 +37,25 @@ home <- here::here()
 ## Plot AIC
 
 ```{r}
-read_csv(paste0(home, "/output/data_aic_01.csv")) %>% 
-  group_by(group) %>% 
+read_csv(paste0(home, "/output/data_aic_01.csv")) |>  
+  group_by(group) |>
   filter(AIC == min(AIC))
 
-aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) %>% 
+aic <- read_csv(paste0(home, "/output/data_aic_01.csv")) |> 
   mutate(formula = ifelse(model == "m0", "*temp+oxy*", NA),
          formula = ifelse(model == "m1", "*temp+temp<sup>2</sup>+oxy*", formula),
          formula = ifelse(model == "m2", "*temp×oxy*", formula),
          formula = ifelse(model == "m3", "*temp+temp<sup>2</sup>+bp(oxy)*", formula),
-         #formula = ifelse(model == "m4", "*temp+temp<sup>2</sup>+logistic(oxy)*", formula),
-         formula = ifelse(model == "m5", "*\u03C6*", formula),
-         formula = ifelse(model == "m6", "*bp(\u03C6)*", formula)#,
-         #formula = ifelse(model == "m7", "logistic(phi)", formula)
-         ) %>% 
-  group_by(group) %>% 
+         formula = ifelse(model == "m4", "*\u03C6*", formula),
+         formula = ifelse(model == "m5", "*bp(\u03C6)*", formula)
+         ) |> 
+  group_by(group) |> 
   mutate(delta_aic = AIC - min(AIC),
-         Favoured = ifelse(delta_aic < 2, "Y", "N")) %>% 
-  ungroup() %>% 
-  separate(group, into = c("species", "life_stage")) %>% 
+         Favoured = ifelse(delta_aic < 2, "Y", "N")) |> 
+  ungroup() |> 
+  separate(group, into = c("species", "life_stage")) |> 
   mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) %>% 
+         life_stage = str_to_title(life_stage)) |> 
   mutate(group2 = paste(species, life_stage))
   
 order <- unique(aic$formula)
@@ -82,26 +78,18 @@ ggplot(aic, aes(group2, delta_aic, color = factor(formula, levels = order),
 #ggsave(paste0(home, "/figures/aic.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
 
 # As table..
-aic2 <- aic %>% 
-  #mutate(group2 = paste(AIC, species, life_stage, sep = "_")) %>% 
-  dplyr::select(group2, formula, delta_aic, Favoured) %>% 
+aic2 <- aic |> 
+  dplyr::select(group2, formula, delta_aic, Favoured) |> 
   pivot_wider(names_from = group2, values_from = delta_aic)
 
-aict <- aic %>% 
-  mutate(delta_aic = round(delta_aic, digits = 2)) %>% 
-  mutate(delta_aic = ifelse(delta_aic == 0, "**0**", delta_aic)) %>% 
-  dplyr::select(group2, formula, delta_aic) %>% 
-  pivot_wider(names_from = group2, values_from = delta_aic) %>% 
-  rename(Formula = formula, 
-         "AIC<sub>cod,adu</sub>" = `Cod Adult`,
-         "AIC<sub>cod,juv</sub>" = `Cod Juvenile`,
-         "AIC<sub>plaice,adu</sub>" = `Plaice Adult`,
-         "AIC<sub>plaice,juv</sub>" = `Plaice Juvenile`,
-         "AIC<sub>flounder,adu</sub>" = `Flounder Adult`,
-         "AIC<sub>flounder,juv</sub>" = `Flounder Juvenile`
-         ) %>% as.data.frame()
+aict <- aic |> 
+  mutate(delta_aic = round(delta_aic, digits = 1)) |> 
+  mutate(delta_aic = ifelse(delta_aic == 0, "**0**", delta_aic)) |> 
+  dplyr::select(group2, formula, delta_aic) |> 
+  pivot_wider(names_from = formula, values_from = delta_aic) |> 
+  arrange(group2)
 
-kableExtra::kbl(aict, format = "markdown") %>%
+kableExtra::kbl(aict, format = "html", escape = FALSE) |>
   kable_styling(font_size = 20)
 
 write.csv(aict, paste0(home, "/figures/aic_table.csv"))

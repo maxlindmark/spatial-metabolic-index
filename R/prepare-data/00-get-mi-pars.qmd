@@ -1,0 +1,218 @@
+---
+title: "Rescaling MI pars"
+author: "Max Lindmark"
+date: today
+date-format: iso
+toc: true
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 100%
+editor: source
+---
+
+# Intro
+Fit models à la Essington (2022) to acquire metabolic index parameters from a mixed GLMM (glmmTMB), leveraging information from species with lots of experimental data. Save metabolic index params and export as csv.
+
+## Load packages & source functions
+
+```{r load libraries}
+#| message: true
+#| warning: false
+
+# Load libraries, install if needed
+library(tidyverse)
+library(readxl)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(glmmTMB)
+library(rMR)
+library(RColorBrewer)
+library(patchwork)
+
+# Source code for plots
+
+home <- here::here()
+```
+
+# Intro
+Here we estimate metabolic index parameters using glmmTMB to data compiled by Essington et al (2022) with experimental data from Baltic Sea species added. We do it in units partial pressure and mg/L.
+
+```{r estimate metabolic index parameters using glmmTMB}
+#| message: true
+#| warning: false
+# https://github.com/fate-spatialindicators/SDM_O2/blob/master/code/estimate_mi_parameters.R
+
+# Read data
+o2 <- read_delim(paste0(home, "/data/metabolic-index/essington_pO2_extended.csv"), delim = ";") |>
+  dplyr::select(-comment)
+
+unique(o2$source)
+
+# Now we need to standardize units across experimental data
+spc_list <- unique(o2$spc)
+
+c_to_K <- function(x) x + 273.15
+
+# TODO: check salinity units in Essington data, not sure it's correct + my values are in pp.thou
+# Get the experimental data in po2
+o2$po2 <- NA
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(o2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(o2, spc == spc_list[i])
+  
+  tmp_dat$po2 <- DO.unit.convert(tmp_dat$lc50,
+                                 DO.units.in = tmp_dat$units[1],
+                                 DO.units.out = "PP", 
+                                 bar.press = 1,
+                                 bar.units.in = "atm",
+                                 temp.C = tmp_dat$temp,
+                                 bar.units.out = "kpa",
+                                 salinity = tmp_dat$salinity[1],
+                                 salinity.units = "uS")
+  
+  o2$po2[spc_index] <- tmp_dat$po2
+  
+}
+
+# Get the experimental data in unit mg/L
+o2$o2 <- NA
+
+for (i in 1:length(spc_list)) {
+  
+  spc_index <- which(o2$spc == spc_list[i])
+  
+  tmp_dat <- dplyr::filter(o2, spc == spc_list[i])
+  
+  tmp_dat$o2 <- DO.unit.convert(tmp_dat$lc50,
+                                DO.units.in = tmp_dat$units[1],
+                                DO.units.out = "mg/L", 
+                                bar.press = 1,
+                                bar.units.in = "atm",
+                                temp.C = tmp_dat$temp,
+                                bar.units.out = "kpa",
+                                salinity = tmp_dat$salinity[1],
+                                salinity.units = "uS")
+  
+  o2$o2[spc_index] <- tmp_dat$o2
+  
+}
+
+# Now convert to convert oxygen from mg/L -> ml/L -> micro mol/l
+# 1 mg/l = 22.391 ml/31.998 = 0.700 ml/l 
+# https://www.ices.dk/data/tools/Pages/Unit-conversions.aspx
+
+o2$o2 <- ((o2$o2*0.7) * (10^3)) / 22.391
+
+o2$spc <- as.factor(o2$spc)
+nspc <- length(levels(o2$spc))
+
+ggplot(o2, aes(po2, o2)) + 
+  geom_point()
+
+# Add Boltzmann-Arrhenius temperature
+tref <- 15 # arbitrary reference temperature
+kb <- 0.000086173324 # Boltsmann's constant in unit Ev
+o2$inv_temp <- (1 / kb)  * ( 1 / (o2$temp + 273.15) - 1 / (tref + 273.15))
+
+# Plot the data we want to fit
+o2 |> 
+  pivot_longer(c(po2, o2)) |> 
+  ggplot(aes(inv_temp, -log(value), color = spc)) + 
+  geom_point() + 
+  geom_smooth(aes(inv_temp, -log(value)), method = "lm", inherit.aes = FALSE) +
+  facet_wrap(~name, ncol = 1, scales = "free")
+
+o2 |> 
+  filter(spc %in% c("AtlanticCod", "plaice", "dab")) |> 
+  ggplot(aes(log(b), log(po2), shape = ref, fill = spc, color = spc)) + 
+  geom_point(size = 4) + 
+  scale_shape_manual(values = c(21:24)) +
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme(legend.position = c(0.85, 0.85))
+```
+
+The last plot illustrates the issue with cod. We know from regional experiments that Baltic cod have a higher critical oxygen, but if we use experiments by Plante using cod from the Western Atlantic, we will estimate them to be MORE oxygen tolerant than Baltic flatfishes. We don't have enough data to estimate both a random species intercept and a "reference" effect. So what I'll do is that I use the original Essington data to estimate the size and temperature dependence of (p)O_2 crit, and then use those estimates to temperature-correct the Baltic experimental data (which anyway don't have mass or temperature variation, so removing them from the data set is a small loss.)
+
+```{r}
+#| message: true
+#| warning: false
+
+o2_og <- o2 |>
+  filter(source == "Essington2022")
+
+# fe_po2 <- tibble(term = names(fixef(fit_po2)$cond),
+#              est = fixef(fit_po2)$cond) |>
+#   filter(term %in% c("log(b)", "inv_temp")) |>
+#   pivot_wider(names_from = "term", values_from = est) |>
+#   rename(n_po2 = `log(b)`,
+#          E_po2 = inv_temp)
+
+# oxygen in unit micro mol / L
+fit_o2 <- glmmTMB(-log(o2) ~ (1|spc) + log(b) + inv_temp,
+                  data = o2_og,
+                  family = gaussian(link = "identity"))
+
+summary(fit_o2)
+
+# Extract parameters (fixed)
+fe <- tibble(term = names(fixef(fit_o2)$cond),
+                est = fixef(fit_o2)$cond) |> 
+  filter(term %in% c("log(b)", "inv_temp")) |> 
+  pivot_wider(names_from = "term", values_from = est) |> 
+  rename(n = `log(b)`,
+         E = inv_temp)
+
+# Temperature and mass correct Baltic species critical oxygen using Essington Eq. 2 and the estimated parameters
+# Following Essington eq. 2, I can calculate A_oi by rearranged it
+# log_po2 = -E*inv_temp - log(Ao) - n*log(b) 
+# ->
+# log(Ao) = -E*inv_temp - n*log(b) - log_po2
+
+# Find A_oi in the new data given fixed effects of temperature and mass, and log(o2_crit)
+o2_new <- o2 |>
+  filter(source == "Lindmark") |> 
+  dplyr::select(spc, b, inv_temp, temp, po2, o2)
+
+o2_new <- o2_new |>
+  mutate(A0_o2 = exp(-fe$E*inv_temp - log(o2) - fe$n*log(b)))
+
+# Check if correct (if we can recreate the random intercepts using this manual correction)
+re_o2 <- data.frame(spc = row.names(ranef(fit_o2)$cond$spc),
+                    est = ranef(fit_o2)$cond$spc$`(Intercept)`) |> 
+  mutate(A0_o2 = exp(fixef(fit_o2)$cond[1] + est))
+
+ggplot() + 
+  geom_point(data = re_o2, aes(A0_o2, spc, color = "random intercept"), size = 2) + 
+  geom_point(data = o2_new, aes(A0_o2, spc, color = "baltic species"), size = 2) + 
+  scale_color_brewer(palette = "Set2", name = "")
+
+
+# Looks good... Now we can save this dataframe and load it when we need to calculate mi in the data.
+mi_params <- o2_new |>
+  dplyr::select(-b, -inv_temp, -o2, -po2, -temp) |>
+  mutate(n = fe$n,
+         E = fe$E) |>
+  rename(species = spc, 
+         A_0 = A0_o2) |>
+  mutate(species = ifelse(species == "AtlanticCod", "cod", as.character(species)))
+  
+# Add whiting and turbot... They get place and cod parameters
+wt <- mi_params |> 
+  slice(1:2) |> 
+  mutate(species = c("turbot", "whiting"))
+
+mi_params <- mi_params |> 
+  bind_rows(wt)
+
+# Save!
+write_csv(mi_params, file = paste0(home, "/data/clean/mi_params.csv"))
+```

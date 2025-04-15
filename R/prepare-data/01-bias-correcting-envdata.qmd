@@ -1,0 +1,568 @@
+---
+title: "Bias-correcting environmental data"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+Read in hindcast and new environmental data and perform bias correction on the new data.
+
+```{r setup}
+#| warning: false
+#| message: false
+
+# Load libraries, install if needed
+library(tidyverse)
+library(tidync)
+library(tidyterra)
+library(ncdf4)
+library(viridis)
+library(sdmTMB)
+library(terra)
+library(patchwork)
+library(ggsidekick); theme_set(theme_sleek())
+library(tidylog)
+
+# Set path
+home <- here::here()
+```
+
+## Read data
+
+```{r}
+#| warning: false
+#| message: false
+
+# Oxygen
+# https://data.marine.copernicus.eu/product/BALTICSEA_MULTIYEAR_BGC_003_012/download?dataset=cmems_mod_bal_bgc_my_P1M-m_202303
+# Print details
+print(nc_open(paste0(home, "/data/covariates/cmems_mod_bal_bgc_my_P1M-m_1742291088556.nc")))
+
+oxy_tibble <- tidync(paste0(home, "/data/covariates/cmems_mod_bal_bgc_my_P1M-m_1742291088556.nc")) |>
+  hyper_tibble() |>
+  mutate(date = as_datetime(time, origin = "1970-01-01")) |>
+  mutate(
+    month = month(date),
+    day = day(date),
+    year = year(date),
+    oxy = o2b * 0.0223909
+  )
+
+# Salinity and temperature
+# https://data.marine.copernicus.eu/product/BALTICSEA_MULTIYEAR_PHY_003_011/download?dataset=cmems_mod_bal_phy_my_P1M-m_202303
+# Print details
+print(nc_open(paste0(home, "/data/covariates/cmems_mod_bal_phy_my_P1M-m_1742290961273.nc")))
+
+st_tibble <- tidync(paste0(home, "/data/covariates/cmems_mod_bal_phy_my_P1M-m_1742290961273.nc")) |>
+  hyper_tibble() |>
+  mutate(date = as_datetime(time, origin = "1970-01-01")) |>
+  mutate(
+    month = month(date),
+    day = day(date),
+    year = year(date)
+  )
+
+# Combine old environmental data
+coper <- st_tibble |> 
+  left_join(oxy_tibble |> dplyr::select(longitude, latitude, oxy, year, month),
+            by = c("longitude", "latitude", "year", "month"))
+
+coper <- coper |> 
+  rename(temp = bottomT,
+         lon = longitude, 
+         lat = latitude,
+         sal = sob) |> 
+  dplyr::select(-time, -date, -day) |> 
+  mutate(source = "coper",
+         year_month = paste(year, month, sep = "_"))
+
+# Hindcast
+hind <- readRDS(file = paste0(home, "/data/covariates/hindcast_1961_2017.rds")) |> 
+  dplyr::select(-hypoxia1, -hypoxia2, -anoxia, -time, -depth) |> 
+  mutate(source = "hindcast",
+         year_month = paste(year, month, sep = "_")) |> 
+  filter(year >= 1993) |> # This is the year where copernicus data start
+  filter(lat <= max(coper$lat))
+
+extra_time <- hind |>
+  filter(year == max(year)) |>
+  mutate(across(c(temp, sal, oxy, year_month), ~NA)) |>
+  replicate_df("year", setdiff(coper$year, hind$year)) |> 
+  mutate(year_month = paste(year, month, sep = "_")) |> 
+  filter(year_month %in% unique(coper$year_month))
+
+hind <- hind |> bind_rows(extra_time)
+```
+
+## Extract values of copernicus to hindcast locations
+
+The two sources are not on the same grid. For fitting, just bind-row then and add a source column. For a wide data, extract with terra.
+
+```{r}
+#| warning: false
+#| message: false
+
+# Loop through all year combos, extract the copernicus temperatures at the data locations of the hindcast
+env_list <- list()
+
+for (i in unique(hind$year_month)) {
+
+  d_sub <- filter(hind, year_month == i)
+  env_sub <- filter(coper, year_month == i)
+
+  # Convert to spat_raster
+  env_raster <- as_spatraster(env_sub,
+    xycols = 3:4,
+    crs = "WGS84", digits = 3
+  )
+
+  # Extract from raster
+  d_sub$temp_n <- terra::extract(
+    env_raster$temp,
+    d_sub |> dplyr::select(lon, lat)
+  )$temp
+
+  d_sub$sal_n <- terra::extract(
+    env_raster$sal,
+    d_sub |> dplyr::select(lon, lat)
+  )$sal
+
+  d_sub$oxy_n <- terra::extract(
+    env_raster$oxy,
+    d_sub |> dplyr::select(lon, lat)
+  )$oxy
+
+  # Save
+  env_list[[i]] <- d_sub
+}
+
+wide <- bind_rows(env_list)
+```
+
+Read in old hindcast data (prior to copernicus)
+
+```{r}
+#| warning: false
+#| message: false
+
+hind_old <- readRDS(file = paste0(home, "/data/covariates/hindcast_1961_2017.rds")) |> 
+  dplyr::select(-hypoxia1, -hypoxia2, -anoxia, -time, -depth) |> 
+  mutate(year_month = paste(year, month, sep = "_")) |> 
+  filter(year < 1993 & year >= 1978) |> 
+  filter(lat <= max(coper$lat)) |> 
+  mutate(sal_n = NA,
+         oxy_n = NA,
+         temp_n = NA,
+         source = "hindcast") |> 
+  filter(lon < 22) |> 
+  filter(!(lat > 55.5 & lon < 13))
+
+wide <- bind_rows(wide, hind_old) |> 
+  filter(lon < 22) |> 
+  filter(!(lat > 55.5 & lon < 13))
+
+wide <- wide |>
+  add_utm_columns(ll_names = c("lon", "lat"))
+```
+
+## Bias correcting with difference- model
+
+### Oxygen
+
+```{r}
+#| warning: false
+#| message: false
+
+oxy_dat <- wide |> 
+  filter(year %in% c(2001:2017)) |> 
+  mutate(diff = oxy - oxy_n) |> 
+  drop_na(diff)
+
+# Make mesh & fit models
+mesh <- make_mesh(oxy_dat, cutoff = 10, xy_cols = c("X", "Y"))
+#plot(mesh)
+
+proj_years <- setdiff(coper$year, drop_na(hind)$year)
+hind_year <- min(coper$year):(min(oxy_dat$year)-1)
+
+# This assumes seasonality is the same.
+# It does capture spatial differences between the models, and the fact that the mean difference seems to vary from year to year. We do this with a random walk, so the difference in means in years 2017--2024 is basically a projection... We can use 1993--2006 for comparing our predictions (then we need extra time I think)
+moxy <- sdmTMB(diff ~ 1,
+               spatial = "on",
+               time_varying = ~1,
+               time_varying_type = "rw0",
+               extra_time = c(hind_year, proj_years),
+               mesh = mesh,
+               time = "year",
+               data = oxy_dat
+               )
+
+moxy
+sanity(moxy)
+
+# Time-varying effect
+est <- as.list(moxy$sd_report, "Est")
+est_se <- as.list(moxy$sd_report, "Std. Error")
+
+tw <- tibble(est = est$b_rw_t,
+             se = est_se$b_rw_t,
+             year = c(hind_year, unique(oxy_dat$year), proj_years))
+
+ptw <- ggplot(tw, aes(year, est)) + 
+  geom_ribbon(aes(ymin = est - 1.96*se, ymax = est + 1.96*se),
+              alpha = 0.3) +
+  labs(x = "Year", y = "Time-varying intercept") +
+  coord_cartesian(expand = 0) +
+  xlim(1978, 2024) +
+  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4) +
+  geom_line() 
+
+# Predict differences (including the extra_time)
+poxy <- predict(moxy, 
+                wide |> filter(year %in% c(hind_year, unique(oxy_dat$year), proj_years)))
+
+# Add in the pre-copernicus years
+poxy <- bind_rows(poxy, hind_old)
+
+# Manually predict the hindcast values, given copernicus and the estimated difference
+poxy$oxy_pred <- poxy$oxy_n + poxy$est
+
+# Time series plots
+pal <- RColorBrewer::brewer.pal(n=4, "Paired")
+ 
+pmean <- poxy |> 
+  pivot_longer(c(oxy, oxy_n, oxy_pred)) |> 
+  mutate(name = fct_recode(name,
+    "Hindcast" = "oxy",
+    "Copernicus" = "oxy_n",
+    "Hindcast-predicted" = "oxy_pred"
+  )) |>
+  summarise(mean = mean(value, na.rm = TRUE), .by = c(name, year)) |> 
+  ggplot(aes(year, mean, color = name, linetype = name)) + 
+  geom_rect(aes(xmin = min(oxy_dat$year), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey95", alpha = 0.1) +
+  geom_rect(aes(xmin = min(proj_years), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey85", alpha = 0.1) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(values = pal[c(1,4,2)]) +
+  labs(x = "Year", y = expression(paste("Mean O"[2], " (ml/L)"))) +
+  theme(legend.position.inside = c(0.15, 0.15),
+        legend.title = element_blank()) + 
+  guides(color = guide_legend(position = "inside")) +
+  coord_cartesian(expand = 0) +
+  annotate("text", label = "(b)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4)
+
+(ptw / pmean) + plot_layout(axes = "collect")
+
+ggsave(paste0(home, "/figures/supp/bias_corr_oxy_means.pdf"), width = 17, height = 14, units = "cm")
+```
+
+### Temperature
+
+```{r}
+#| warning: false
+#| message: false
+
+temp_dat <- wide |> 
+  filter(year %in% c(2001:2017)) |> 
+  mutate(diff = temp - temp_n) |> 
+  drop_na(diff)
+
+# Make mesh & fit models
+mesh <- make_mesh(temp_dat, cutoff = 10, xy_cols = c("X", "Y"))
+#plot(mesh)
+
+# Fit
+mtemp <- sdmTMB(diff ~ 1,
+                spatial = "on",
+                time_varying = ~1,
+                time_varying_type = "rw0",
+                extra_time = c(hind_year, proj_years),
+                mesh = mesh,
+                time = "year",
+                data = temp_dat
+                )
+
+mtemp
+sanity(mtemp)
+
+# Time-varying effect
+est <- as.list(mtemp$sd_report, "Est")
+est_se <- as.list(mtemp$sd_report, "Std. Error")
+
+tw <- tibble(est = est$b_rw_t,
+             se = est_se$b_rw_t,
+             year = c(hind_year, unique(temp_dat$year), proj_years))
+
+ptw <- ggplot(tw, aes(year, est)) + 
+  geom_ribbon(aes(ymin = est - 1.96*se, ymax = est + 1.96*se),
+              alpha = 0.3) +
+  labs(x = "Year", y = "Time-varying intercept") +
+  coord_cartesian(expand = 0) +
+  xlim(1978, 2024) +
+  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4) +
+  geom_line() 
+
+# Predict differences (including the extra_time)
+ptemp <- predict(mtemp, wide |> filter(year %in% c(hind_year, unique(temp_dat$year), proj_years)))
+
+# Add in the pre-copernicus years
+ptemp <- bind_rows(ptemp, hind_old)
+
+# Manually predict the hindcast values, given copernicus and the estimated difference
+ptemp$temp_pred <- ptemp$temp_n + ptemp$est
+
+# Time series plots
+pal <- RColorBrewer::brewer.pal(n=4, "Paired")
+ 
+pmean <- ptemp |> 
+  pivot_longer(c(temp, temp_n, temp_pred)) |> 
+  mutate(name = fct_recode(name,
+    "Hindcast" = "temp",
+    "Copernicus" = "temp_n",
+    "Hindcast-predicted" = "temp_pred"
+  )) |>
+  summarise(mean = mean(value, na.rm = TRUE), .by = c(name, year)) |> 
+  ggplot(aes(year, mean, color = name, linetype = name)) + 
+  geom_rect(aes(xmin = min(temp_dat$year), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey95", alpha = 0.1) +
+  geom_rect(aes(xmin = min(proj_years), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey85", alpha = 0.1) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(values = pal[c(1,4,2)]) +
+  labs(x = "Year", y = "Mean temperature (°C)") +
+  theme(legend.position.inside = c(0.15, 0.85),
+        legend.title = element_blank()) + 
+  guides(color = guide_legend(position = "inside")) +
+  coord_cartesian(expand = 0) +
+  annotate("text", label = "(b)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4)
+
+(ptw / pmean) + plot_layout(axes = "collect")
+
+ggsave(paste0(home, "/figures/supp/bias_corr_temp_means.pdf"), width = 17, height = 14, units = "cm")
+```
+
+### Salinity
+
+```{r}
+#| warning: false
+#| message: false
+
+sal_dat <- wide |> 
+  filter(year %in% c(2001:2017)) |> 
+  mutate(diff = sal - sal_n) |> 
+  drop_na(diff)
+
+# Make mesh & fit models
+mesh = make_mesh(sal_dat, cutoff = 10, xy_cols = c("X", "Y"))
+#plot(mesh)
+
+# Fit
+msal <- sdmTMB(diff ~ 1,
+               spatial = "on",
+               time_varying = ~1,
+               time_varying_type = "rw0",
+               extra_time = c(hind_year, proj_years),
+               mesh = mesh,
+               time = "year",
+               data = sal_dat
+               )
+
+msal
+sanity(msal)
+
+# Time-varying effect
+est <- as.list(msal$sd_report, "Est")
+est_se <- as.list(msal$sd_report, "Std. Error")
+
+tw <- tibble(est = est$b_rw_t,
+             se = est_se$b_rw_t,
+             year = c(hind_year, unique(sal_dat$year), proj_years))
+
+ptw <- ggplot(tw, aes(year, est)) + 
+  geom_ribbon(aes(ymin = est - 1.96*se, ymax = est + 1.96*se),
+              alpha = 0.3) +
+  labs(x = "Year", y = "Time-varying intercept") +
+  coord_cartesian(expand = 0) +
+  xlim(1978, 2024) +
+  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4) +
+  geom_line() 
+
+# Predict differences (including the extra_time)
+psal <- predict(msal, wide |> filter(year %in% c(hind_year, unique(sal_dat$year), proj_years)))
+
+# Add in the pre-copernicus years
+psal <- bind_rows(psal, hind_old)
+
+# Manually predict the hindcast values, given copernicus and the estimated difference
+psal$sal_pred <- psal$sal_n + psal$est
+
+# Time series plots
+pal <- RColorBrewer::brewer.pal(n=4, "Paired")
+ 
+pmean <- psal |> 
+  pivot_longer(c(sal, sal_n, sal_pred)) |> 
+  mutate(name = fct_recode(name,
+    "Hindcast" = "sal",
+    "Copernicus" = "sal_n",
+    "Hindcast-predicted" = "sal_pred"
+  )) |>
+  summarise(mean = mean(value, na.rm = TRUE), .by = c(name, year)) |> 
+  ggplot(aes(year, mean, color = name, linetype = name)) + 
+  geom_rect(aes(xmin = min(temp_dat$year), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey95", alpha = 0.1) +
+  geom_rect(aes(xmin = min(proj_years), xmax = max(proj_years),
+                ymin = -Inf, ymax = Inf), color = NA,
+              fill = "grey85", alpha = 0.1) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(values = pal[c(1,4,2)]) +
+  labs(x = "Year", y = "Mean salinity (ppt)") +
+  theme(legend.position.inside = c(0.15, 0.85),
+        legend.title = element_blank()) + 
+  guides(color = guide_legend(position = "inside")) +
+  coord_cartesian(expand = 0) +
+  annotate("text", label = "(b)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2,
+           color = "gray40", size = 4)
+
+(ptw / pmean) + plot_layout(axes = "collect")
+
+ggsave(paste0(home, "/figures/supp/bias_corr_sal_means.pdf"), width = 17, height = 14, units = "cm")
+```
+
+## Make spatial plots
+
+```{r}
+#| warning: false
+#| message: false
+
+# Plot environmental data for example year
+poxys <- filter(poxy, year == 2012 & month == 10) |> 
+  rename(Hindcast = oxy, 
+         Copernicus = oxy_n,
+         `Predicted Hindcast` = oxy_pred) |> 
+  pivot_longer(c("Hindcast", "Copernicus", "Predicted Hindcast")) |> 
+  ggplot() +
+  geom_raster(aes(lon, lat, fill = value)) + 
+  facet_wrap(~name) +
+  scale_fill_viridis(option = "mako", name = expression(paste("O"[2], " (ml/L)"))) + 
+  guides(fill = guide_colorbar(position = "inside")) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme(legend.position.inside = c(0.052, 0.73),
+        legend.key.size = unit(0.25, "cm"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank())
+
+ptemps <- filter(ptemp, year == 2012 & month == 10) |> 
+  rename(Hindcast = temp, 
+         Copernicus = temp_n,
+         `Predicted Hindcast` = temp_pred) |> 
+  pivot_longer(c("Hindcast", "Copernicus", "Predicted Hindcast")) |> 
+  ggplot() +
+  geom_raster(aes(lon, lat, fill = value)) + 
+  facet_wrap(~name) +
+  scale_fill_viridis(option = "magma", name = "Temperature\n(°C)") + 
+  guides(fill = guide_colorbar(position = "inside")) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme(legend.position.inside = c(0.07, 0.73),
+        strip.text.x = element_blank(),
+        legend.key.size = unit(0.25, "cm"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())
+
+psals <- filter(psal, year == 2012 & month == 10) |> 
+  rename(Hindcast = sal, 
+         Copernicus = sal_n,
+         `Predicted Hindcast` = sal_pred) |> 
+  pivot_longer(c("Hindcast", "Copernicus", "Predicted Hindcast")) |> 
+  ggplot() +
+  geom_raster(aes(lon, lat, fill = value)) + 
+  facet_wrap(~name) +
+  scale_fill_viridis(option = "D", name = "Salinity (ppt)") + 
+  guides(fill = guide_colorbar(position = "inside")) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme(legend.position.inside = c(0.068, 0.73),
+        strip.text.x = element_blank(),
+        legend.key.size = unit(0.25, "cm"),
+        axis.title.y = element_blank())
+
+(poxys / ptemps / psals)
+
+ggsave(paste0(home, "/figures/supp/bias_corr_maps.pdf"), width = 18, height = 18, units = "cm")
+```
+
+## Save data
+
+```{r}
+#| warning: false
+#| message: false
+
+save_oxy <- poxy |> 
+  filter(source == "hindcast") |> 
+  mutate(oxy_full = oxy,
+         oxy_full = ifelse(is.na(oxy_full), oxy_pred, oxy_full)) |> 
+  dplyr::select(lon, lat, year, month, oxy_full) |> 
+  rename(oxy = oxy_full) |> 
+  mutate(id = paste(lon, lat, year, month, sep = "_")) |> 
+  distinct(id, .keep_all = TRUE) |> 
+  arrange(year, month)
+
+save_temp <- ptemp |> 
+  filter(source == "hindcast") |> 
+  mutate(temp_full = temp,
+         temp_full = ifelse(is.na(temp_full), temp_pred, temp_full)) |> 
+  dplyr::select(lon, lat, year, month, temp_full) |> 
+  rename(temp = temp_full) |> 
+  mutate(id = paste(lon, lat, year, month, sep = "_")) |> 
+  distinct(id, .keep_all = TRUE) |> 
+  arrange(year, month)
+
+save_sal <- psal |> 
+  filter(source == "hindcast") |> 
+  mutate(sal_full = sal,
+         sal_full = ifelse(is.na(sal_full), sal_pred, sal_full)) |> 
+  dplyr::select(lon, lat, year, month, sal_full) |> 
+  rename(sal = sal_full) |> 
+  mutate(id = paste(lon, lat, year, month, sep = "_")) |> 
+  distinct(id, .keep_all = TRUE) |> 
+  arrange(year, month)
+
+bias_corr_vars <- save_oxy |> 
+  left_join(save_temp |> dplyr::select(id, temp), by = "id") |> 
+  left_join(save_sal |> dplyr::select(id, sal), by = "id")
+  
+# Save only grids that I have temperature in for all years (since I don't have hindcast between 2018--2023, there are a few cells with NA predicted variables)
+
+grid_keep <- bias_corr_vars |> 
+  filter(year == 2022) |> 
+  mutate(id = paste(lon, lat, sep = "_")) |> 
+  drop_na(oxy) |> pull(id)
+
+bias_corr_vars <- bias_corr_vars |> 
+  mutate(id = paste(lon, lat, sep = "_")) |> 
+  filter(id %in% grid_keep) |>
+  dplyr::select(-id)
+
+write_csv(bias_corr_vars, paste0(home, "/data/covariates/bias_corr_vars.csv"))
+```

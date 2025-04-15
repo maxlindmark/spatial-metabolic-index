@@ -1,5 +1,5 @@
 ---
-title: "Fit tweedie models to biomass density"
+title: "Fit tweedie models to biomass density and extract conditional predictions"
 author: "Max Lindmark"
 date: today
 date-format: iso
@@ -17,7 +17,7 @@ editor: source
 
 ## Intro
 
-Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects
+Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects of oxygen and temperature
 
 ## Load packages & source functions
 
@@ -25,23 +25,16 @@ Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects
 #| message: false
 #| warning: false
 
-# Load libraries, install if needed
-pkgs <- c("tidyverse", "tidylog", "RCurl", "devtools", "sdmTMB",
-          "viridis", "RColorBrewer", "here") 
-
-if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
-
-    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
-  
-  }
-
-invisible(lapply(pkgs, library, character.only = T))
-
-# remotes::install_github("pbs-assess/sdmTMBextra")
-library(sdmTMBextra)
+library(tidyverse)
+library(tidylog)
+library(RCurl)
+library(devtools)
+library(sdmTMB)
+library(viridis)
+library(RColorBrewer)
+library(here)
 
 # Source code for map plots
-# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
 devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
 
@@ -53,74 +46,42 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>%
-  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
-  rename(X = x, Y = y) %>% 
-  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
-                 flounder_juvenile, plaice_adult, plaice_juvenile),
-               names_to = "group", values_to = "density") %>% 
-  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
-  drop_na(depth, temp, oxy, sal, density)
-
-# Drop dab!
-# d %>%
-#   filter(group == "dab_juvenile" & quarter == 1) %>%
-#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-# 
-# d %>%
-#   filter(group == "dab_juvenile" & quarter == 4) %>%
-#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-
-d <- d %>% filter(!species == "dab")
+d <- readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+  add_utm_columns(ll_names = c("lon", "lat")) |> 
+  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "adult"))
 ```
 
 ## Scale variables
 
 ```{r}
-d <- d %>% 
-  group_by(group) %>% # scale relative to the same mean for all groups
-  mutate(temp_sc = as.vector(scale(temp)),
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_3).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_3).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(3_3).csv")))
+
+pred_grid <- pred_grid |>
+  mutate(temp_sc = (temp - mean(temp)) / sd(temp),
          temp_sq = temp_sc^2,
-         oxy_sc = as.vector(scale(oxy)),
+         oxy_sc = (oxy - mean(oxy)) / sd(oxy),
          oxy_sq = oxy_sc^2,
-         sal_sc = as.vector(scale(sal)),
-         depth_sc = as.vector(scale(depth)),
-         depth_sq = depth_sc*depth_sc) %>%
-  mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) %>% 
-  ungroup()
+         sal_sc = (sal - mean(sal)) / sd(sal),
+         depth_sc = (depth - mean(depth)) / sd(depth),
+         depth_sq = depth_sc*depth_sc,
+         month_f = as.factor(month),
+         year_f = as.factor(year))
+
+d <- d |> 
+  mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
+         temp_sq = temp_sc^2,
+         oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
+         oxy_sq = oxy_sc^2,
+         sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
+         depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
+         depth_sq = depth_sc*depth_sc,
+         month_f = as.factor(month),
+         year_f = as.factor(year))
 ```
 
-## Read and scale the prediction grid
-
-```{r}
-pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
-
-# Scale variables with respect to data, not the prediction grid!
-pred_grid <- pred_grid %>% 
-  drop_na(depth, temp, oxy, sal) %>% 
-  mutate(temp_sc = (temp - mean(d$temp)) / sd(d$temp),
-         temp_sq = temp_sc^2,
-         oxy_sc = (oxy - mean(d$oxy)) / sd(d$oxy),
-         oxy_sq = oxy_sc^2,
-         sal_sc = (sal - mean(d$sal)) / sd(d$sal),
-         depth_sc = (depth - mean(d$depth)) / sd(d$depth),
-         depth_sq = depth_sc*depth_sc) %>% 
-  mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) %>% 
-  ungroup()
-```
-
-## Fit the model that is preferred by most (m3, i.e., temp + temp_sq + bp_oxyg) 
+## Fit the model that is preferred by the given group
 Plot residuals, save model object, plot conditional effects!
 
 ```{r}
@@ -131,62 +92,111 @@ cog_list <- list()
 
 for(i in unique(d$group)) { 
     
-    dd <- d %>% filter(group == i)
+    dd <- d |> filter(group == i)
 
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
+    # For some combos, there are years without a single occurrence. This makes it hard to fit year_f models...
+    dd <- dd |> 
+      mutate(sum = sum(density), .by = year) |> 
+      filter(sum > 0)
+    
+    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 12)
 
-    # this is m3 (bp oxy), favoured by all!
-    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year")
-        
+    ggplot() +
+      inlabru::gg(mesh$mesh) +
+      coord_fixed() +
+      geom_point(aes(X, Y), data = d, alpha = 0.2, size = 0.5) +
+      annotate("text", label = paste(str_to_sentence(unique(dd$life_stage)), unique(dd$common_name)),
+               x = -Inf, y = Inf, vjust = 1.5, hjust = -0.1,
+               color = "gray40", size = 4) + 
+      labs(x = "Easting (km)", y = "Northing (km)")
+    
+    ggsave(paste0(home, paste0("/figures/supp/mesh_", i, ".pdf")), width = 14, height = 14, units = "cm")
+
+    if(i %in% c("cod_juvenile", "plaice_adult")){
+
+      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
+                  data = dd,
+                  mesh = mesh,
+                  family = tweedie(link = "log"),
+                  spatiotemporal = "iid",
+                  spatial = "on",
+                  time = "year")
+
+    } else if(i %in% c("dab_all", "flounder_adult", "turbot_all", "whiting_all")){
+      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
+                  data = dd,
+                  mesh = mesh,
+                  family = tweedie(link = "log"),
+                  spatiotemporal = "iid",
+                  spatial = "on",
+                  time = "year")
+
+    } else{
+
+      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
+                  data = dd,
+                  mesh = mesh,
+                  family = tweedie(link = "log"),
+                  spatiotemporal = "iid",
+                  spatial = "on",
+                  time = "year",
+                  priors = sdmTMBpriors(
+                    threshold_breakpt_slope = normal(0, 1),
+                    threshold_breakpt_cut = normal(0, 1)))
+
+      }
+    
     # Check again to be safe...
-    sanity(m3)
+    sanity(m)
 
     # Plot residuals
-    samps <- sdmTMBextra::predict_mle_mcmc(m3, mcmc_iter = 201, mcmc_warmup = 200)
-    mcmc_res <- residuals(m3, type = "mle-mcmc", mcmc_samples = samps)
-    dd$res <- as.vector(mcmc_res)
+    res <- simulate(m, nsim = 300, type = "mle-mvn") |>
+      dharma_residuals(m, plot = FALSE) |>
+      mutate(group = i)
     
     # Store residuals
-    res_list[[i]] <- dd
+    res_list[[i]] <- res
 
     # Create prediction dfs for conditional effects
-    nd <- data.frame(expand.grid(temp = seq(min(dd$temp),
-                                            max(dd$temp),
+    nd <- data.frame(expand.grid(temp = seq(min(dd$temp) - 4,
+                                            max(dd$temp) + 4,
                                             length.out = 50),
-                                 oxy = seq(min(dd$oxy),
-                                           max(dd$oxy),
+                                 oxy = seq(min(dd$oxy) - 4,
+                                           max(dd$oxy) + 4,
                                            length.out = 50),
-                                 quarter = c(1, 4))) %>%
-      mutate(temp_sc = (temp - mean(dd$temp)) / sd(dd$temp),
+                                 month = 11)) |>
+      mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
              temp_sq = temp_sc^2,
-             oxy_sc = (oxy - mean(dd$oxy)) / sd(dd$oxy)) %>%
-      mutate(year = 1999, year_f = as.factor(1999), quarter_f = as.factor(quarter), sal_sc = 0, # and the rest...
+             oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
+             year = min(dd$year),
+             year_f = as.factor(min(dd$year)),
+             month_f = as.factor(month),
+             sal_sc = 0, 
              depth_sc = 0, depth_sq = 0,
+             X = mean(dd$X),
+             Y = mean(dd$Y),
              group = i)
 
     # Predict
-    pred <- predict(m3, newdata = nd, re_form = NA, se_fit = TRUE)
-    # TODO: why do I need both quarters to predict?
-
-    pred_list[[i]] <- pred %>% filter(quarter == 1)
+    pred <- predict(m, newdata = nd, re_form = NA, re_form_iid = NA, se_fit = TRUE)
+    
+    pred_list[[i]] <- pred
 
     # Predict on grid 
-    p <- predict(m3, newdata = pred_grid) %>% mutate(group = i)
+    p <- predict(m, newdata = pred_grid |> 
+                   filter(year %in% unique(dd$year))
+                 ) |> mutate(group = i)
     
     pred_grid_list[[i]] <- p 
     
     # Predict on grid and get cog
-    pcog <- predict(m3, newdata = pred_grid, return_tmb_object = TRUE)
-    cog <- get_cog(pcog, format = "wide") %>% mutate(group = i)
+    pcog <- predict(m, newdata = pred_grid |> 
+                   filter(year %in% unique(dd$year)),
+                          return_tmb_object = TRUE)
+    
+    cog <- get_cog(pcog, format = "wide") |> mutate(group = i)
             
-    cog <- cog %>%
+    cog <- cog |>
       mutate_at(c("est_x", "lwr_x", "upr_x", "est_y", "lwr_y", "upr_y"),
                 ~ . * 1000)
     
@@ -194,35 +204,33 @@ for(i in unique(d$group)) {
     
 }
 
-# Save predictions and sims as data frames
+# Save predictions
 preds <- dplyr::bind_rows(pred_list)
 preds_grid <- dplyr::bind_rows(pred_grid_list)
 res <- dplyr::bind_rows(res_list)
 cogs <- dplyr::bind_rows(cog_list)
 ```
 
-## Plot residuals
-
-```{r}
-# Plot residuals
-res %>% 
-  mutate(group2 = str_replace(group, "_", " "),
-         group2 = str_to_title(group2)) %>%
-  ggplot(aes(sample = res)) +
-  stat_qq(size = 0.75, shape = 21, fill = NA) +
-  facet_wrap(~group2) +
-  stat_qq_line() +
-  labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
-  theme(aspect.ratio = 1)
-
-ggsave(paste0(home, "/figures/supp/qq_sdm_02.pdf"), width = 17, height = 17, units = "cm")
-```
-
-## Save
-
 ```{r}
 write_csv(res, paste0(home, "/output/residuals_02_sdms.csv"))
 write_csv(preds, paste0(home, "/output/conditional_02_sdms.csv"))
 write_csv(preds_grid, paste0(home, "/output/pred_grids_02_sdms.csv"))
 write_csv(cogs, paste0(home, "/output/cogs_02_sdms.csv"))
+```
+
+## Plot residuals
+
+```{r}
+# Plot residuals
+res |> 
+  separate(group, into = c("common_name", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(group2 = paste(str_to_sentence(life_stage), common_name)) |>
+  ggplot(aes(observed, expected)) +
+  geom_point(color = "grey30", shape = 21, size = 0.5) +
+  geom_abline(col = "tomato3", linewidth = 0.6) +
+  theme(aspect.ratio = 1) +
+  facet_wrap(~group2) +
+  labs(x = "Observed", y = "Expected")
+
+ggsave(paste0(home, "/figures/supp/qq_sdm_02.pdf"), width = 17, height = 14, units = "cm")
 ```

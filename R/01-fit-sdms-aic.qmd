@@ -25,24 +25,19 @@ Fit Tweedie models to biomass density of cod, flounder, plaice and dab (juvenile
 #| message: false
 #| warning: false
 
-# Load libraries, install if needed
-pkgs <- c("tidyverse", "readxl", "tidylog", "RCurl", "devtools", "patchwork",
-          "kableExtra", "viridis", "RColorBrewer", "here", "sdmTMBextra") 
-
-if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
-
-    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
-  
-  }
-
-invisible(lapply(pkgs, library, character.only = T))
-
-# Packages not on CRAN or dev version
-# remotes::install_github("pbs-assess/sdmTMB", dependencies = TRUE)
+library(tidyverse)
+library(tidylog)
+library(readxl)
+library(readr)
+library(RCurl)
+library(devtools)
+library(patchwork)
+library(kableExtra)
+library(viridis)
+library(RColorBrewer)
 library(sdmTMB)
 
 # Source code for map plots
-# You need: # devtools::install_github("seananderson/ggsidekick") # not on CRAN; library(ggsidekick)
 devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
 
@@ -54,56 +49,28 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/catch_clean.csv") %>% %>% 
-  readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) %>%
-  rename(X = x, Y = y) %>% 
-  pivot_longer(c(cod_adult, cod_juvenile, dab_adult, dab_juvenile, flounder_adult,
-                 flounder_juvenile, plaice_adult, plaice_juvenile),
-               names_to = "group", values_to = "density") %>% 
-  separate(group, into = c("species", "life_stage"), remove = FALSE) %>% 
-  drop_na(depth, temp, oxy, sal, density)
+d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+  add_utm_columns(ll_names = c("lon", "lat")) |> 
+  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "all"),
+         life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage))
 
 # Read metabolic parameter estimates and left_join
-mi_pars <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/mi_params.csv") %>%
-  readr::read_csv(paste0(home, "/data/clean/mi_params.csv")) %>% 
-  dplyr::select(n_o2, E_o2, A0_o2, species) #  TODO: remove the extra columns for pressure based parameters
+mi_pars <- read_csv(paste0(home, "/data/clean/mi_params.csv")) 
 
-# TODO: for now we'll use plaice parameters for flounder, see "00_estimate_mi_params.Rmd"
-mi_pars
+mi_pars <- mi_pars |> 
+  rename(common_name = species) |> 
+  mutate(A_0 = ifelse(common_name == "flounder",
+                      filter(mi_pars, common_name == "plaice")$A_0,
+                      A_0))
 
-mi_pars <- mi_pars %>% 
-  mutate(A0_o2 = ifelse(species == "flounder",
-                        filter(mi_pars, species == "plaice")$A0_o2,
-                        A0_o2))
-
-d <- left_join(d, mi_pars, by = "species")
+d <- left_join(d, mi_pars, by = "common_name")
 
 # Read size csv to calculate the metabolic index
-sizes <- #readr::read_csv("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/data/clean/sizes.csv") %>% 
-  readr::read_csv(paste0(home, "/data/clean/sizes.csv")) %>%
-  mutate(group = paste(species, name, sep = "_")) %>% 
-  dplyr::select(group, B)
+sizes <- read_csv(paste0(home, "/data/clean/sizes.csv")) |>
+  mutate(group = paste(common_name, life_stage, sep = "_")) |> 
+  dplyr::select(group, B, species)
 
-d <- left_join(d, sizes, by = "group")
-
-# Drop dab!
-# d %>%
-#   filter(group == "dab_juvenile" & quarter == 1) %>%
-#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-# 
-# d %>%
-#   filter(group == "dab_juvenile" & quarter == 4) %>%
-#   mutate(pres = ifelse(density > 0, "1", "0")) %>%
-#   ggplot(aes(X, Y, color = pres)) +
-#   geom_point(size = 0.3) +
-#   coord_fixed() +
-#   facet_wrap(~year)
-
-d <- d %>% filter(!species == "dab")
+d <- tidylog::left_join(d, sizes, by = "group")
 ```
 
 ## Calculate the metabolic index
@@ -118,208 +85,177 @@ kb <- 0.000086173324 # Boltzmann's constant
 t_ref <- 15 # arbitrary reference temperature
 
 # Calculate the metabolic index
-d <- d %>%
+d <- d |>
   mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
-         phi = A0_o2*(B^n_o2)*oxy_si * exp((E_o2/kb)*inv_temp)) %>% 
-  drop_na(phi)
+         phi = A_0*(B^n)*oxy_si * exp((E/kb)*inv_temp))
 ```
 
 ## Scale variables
 
 ```{r}
-d <- d %>% 
-  group_by(group) %>% 
-  mutate(phi_sc = as.vector(scale(phi)),
-         temp_sc = as.vector(scale(temp)),
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_3).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_3).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(3_3).csv")))
+
+d <- d |> 
+  mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
          temp_sq = temp_sc^2,
-         oxy_sc = as.vector(scale(oxy)),
+         oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
          oxy_sq = oxy_sc^2,
-         sal_sc = as.vector(scale(sal)),
-         depth_sc = as.vector(scale(depth)),
-         depth_sq = depth_sc*depth_sc) %>%
-  mutate(quarter_f = as.factor(quarter),
-         year_f = as.factor(year)) %>% 
-  ungroup()
-
-# Seems like a non-linear relationship with temperature, but a quadratic largely does the job??
-ggplot(d, aes(temp_sc, density)) +
-  geom_smooth(method = "lm", color = "grey50", se = FALSE) +
-  geom_smooth(method = "gam", formula = y~s(x, k=4), color = "steelblue3", se = FALSE) +
-  geom_smooth(method = "lm", formula = y ~ x + I(x^2), color = "tomato3", se = FALSE) +
-  facet_wrap(~group, scales = "free")
-
-ggplot(d, aes(oxy_sc, density)) +
-  geom_smooth(method = "lm", color = "grey50", se = FALSE) +
-  geom_smooth(method = "gam", formula = y~s(x, k=4), color = "steelblue3", se = FALSE) +
-  geom_smooth(method = "lm", formula = y ~ x + I(x^2), color = "tomato3", se = FALSE) +
-  facet_wrap(~group, scales = "free")
-
-ggplot(d, aes(phi_sc, log(density + 1))) +
-  geom_smooth(method = "lm", color = "grey50", se = FALSE) +
-  geom_smooth(method = "gam", formula = y~s(x, k=4), color = "steelblue3", se = FALSE) +
-  geom_smooth(method = "lm", formula = y ~ x + I(x^2), color = "tomato3", se = FALSE) +
-  facet_wrap(~group, scales = "free")
+         sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
+         depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
+         depth_sq = depth_sc*depth_sc,
+         month_f = as.factor(month),
+         year_f = as.factor(year)) |> 
+  mutate(phi_sc = as.vector(scale(phi)), .by = group) # don't scale this across a common value because it varies by species
 ```
 
 ```{r}
-# Plot mi by species and life stage
-pal <- brewer.pal(name = "Dark2", n = 8)[c(7, 5, 3)]
+order <- c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+           "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")
 
-d %>% 
-  mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) %>% 
-  ggplot(aes(phi, fill = species, color = species)) + 
+#display.brewer.pal(name = "Paired", n = 12)
+pal <- brewer.pal(n = 12, name = "Paired")[c(1:6, 8, 10, 12)]
+#scales::show_col(pal)
+
+d |> 
+  mutate(life_stage = str_to_sentence(life_stage),
+         group2 = paste(str_to_sentence(common_name), str_to_sentence(life_stage)),
+         group2 = factor(group2, levels = order)) |> 
+  ggplot(aes(phi, fill = group2, color = group2)) + 
   geom_density(alpha = 0.2) + 
-  geom_vline(xintercept = 0, linetype = 2) + 
+  geom_vline(xintercept = 1, linetype = 2) + 
   coord_cartesian(expand = 0) + 
   facet_wrap(~ life_stage, ncol = 1) +
-  theme_sleek(base_size = 9) + 
-  theme(legend.position = c(0.85, 0.85)) +
+  theme(legend.position = "bottom",
+        legend.key.size = unit(0.4, "cm"),
+        legend.title = element_blank()) +
   labs(x = "Metabolic index (\u03C6)", y = "Density", fill = "Species", color = "Species") + 
-  scale_color_manual(values = rev(pal), name = "") +
-  scale_fill_manual(values = rev(pal), name = "")
+  scale_color_manual(values = pal) +
+  scale_fill_manual(values = pal) +
+  NULL
 
-ggsave(paste0(home, "/figures/supp/mi_histogram.pdf"), width = 11, height = 11, units = "cm", device = cairo_pdf)
+ggsave(paste0(home, "/figures/supp/mi_density.pdf"), width = 13, height = 16, units = "cm", device = cairo_pdf)
 ```
 
-## Fit models and save AIC
-
-Fit models!
+## Fit models and save marginal AIC
 
 ```{r fit models}
 data_list_aic <- list()
 
 for(i in unique(d$group)) {  
     
-    dd <- d %>% filter(group == i)
+    dd <- d |> filter(group == i)
     
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15) # Need specific meshes because not for all hauls did we record all species
+    # For some combos, there are years without a single occurrence. This makes it hard to fit year_f models...
+    dd <- dd |> 
+      mutate(sum = sum(density), .by = year) |> 
+      filter(sum > 0)
+    
+    plot_map_fc + 
+      geom_point(data = dd |> mutate(pres = ifelse(density == 0, "0", "1")),
+                 aes(X*1000, Y*1000, color = pres)) +
+      facet_wrap(~year)
+    
+    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 12)
     
     print(
     ggplot() +
       inlabru::gg(mesh$mesh) +
       coord_fixed() +
       geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
-      annotate("text", -Inf, Inf, label = paste("n knots = ", mesh$mesh$n), hjust = -0.1, vjust = 2) + 
       labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
     )
     
     print(i)
     
-    # 0. Linear oxygen and temperature, spatially varying quarter
-    m0 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + oxy_sc,
+    # 0. Linear oxygen and temperature
+    m0 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + oxy_sc,
                  data = dd,
                  mesh = mesh,
+                 # Tweedie seems to work best for the more complex models
                  family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 # this setting for spatial field(s) works better for majority of groups compare to single sf
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f, # if enabled, keep quarter_f in main formula; 
+                 #family = delta_gamma(type = "poisson-link"),
+                 spatiotemporal = "iid",
+                 spatial = "on",
                  time = "year")
     print("m0")
     sanity(m0)
-    dd$m0_res <- residuals(m0)
     
-    # 1. Linear oxygen and squared temperature, spatially varying quarter
-    m1 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
+    # 1. Linear oxygen and squared temperature
+    m1 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
                  data = dd,
                  mesh = mesh,
                  family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
+                 #family = delta_gamma(type = "poisson-link"),
+                 spatiotemporal = "iid",
+                 spatial = "on",
                  time = "year")
     print("m1")
     sanity(m1)
-    dd$m1_res <- residuals(m1)
     
-    # 2. interaction between linear oxygen and temperature, drop quadratic
-    m2 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
+    # 2. Interaction between linear oxygen and temperature
+    m2 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
                   data = dd,
                   mesh = mesh,
                   family = tweedie(link = "log"),
-                  spatiotemporal = "IID",
-                  spatial = "off",
-                  spatial_varying = ~0 + quarter_f,
+                  #family = delta_gamma(type = "poisson-link"),
+                  spatiotemporal = "iid",
+                  spatial = "on",
                   time = "year")
     print("m2")
     sanity(m2)
-    dd$m2_res <- residuals(m2)
 
-    # 3. breakpoint oxygen
-    m3 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
+    # 3. Breakpoint oxygen
+    m3 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
                  data = dd,
                  mesh = mesh,
                  family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year")
+                 #family = delta_gamma(type = "poisson-link"),
+                 spatiotemporal = "iid",
+                 spatial = "on",
+                 time = "year",
+                 priors = sdmTMBpriors(
+                   threshold_breakpt_slope = normal(0, 1),
+                   threshold_breakpt_cut = normal(0, 1)))
     print("m3")
     sanity(m3)
-    dd$m3_res <- residuals(m3)
-
-    # 4. logistic oxygen
-    # m4 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + logistic(oxy_sc),
-    #              data = dd,
-    #              mesh = mesh,
-    #              family = delta_gamma(link1 = "logit", link2 = "log"),
-    #              spatiotemporal = "off",
-    #              spatial = "on",
-    #              time = "year",
-    #              control = sdmTMBcontrol(newton_loops = 2))
-    # print("m4")
-    # sanity(m4)
-    # dd$m4_res <- residuals(m4)
-
-    # 5. linear metabolic index
-    m5 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + phi_sc,
+    
+    # 4. linear metabolic index
+    m4 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + phi_sc,
                  data = dd,
                  mesh = mesh,
                  family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
+                 #family = delta_gamma(type = "poisson-link"),
+                 spatiotemporal = "iid",
+                 spatial = "on",
                  time = "year")
+    print("m4")
+    sanity(m4)
+
+    # 5. breakpoint metabolic index!
+    m5 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + breakpt(phi_sc),
+                 data = dd,
+                 mesh = mesh,
+                 family = tweedie(link = "log"),
+                 #family = delta_gamma(type = "poisson-link"),
+                 spatiotemporal = "iid",
+                 spatial = "on",
+                 time = "year",
+                 priors = sdmTMBpriors(
+                   threshold_breakpt_slope = normal(0, 1),
+                   threshold_breakpt_cut = normal(0, 1)))
+                 
     print("m5")
     sanity(m5)
-    dd$m5_res <- residuals(m5)
-
-    # 6. breakpoint metabolic index!
-    m6 <- sdmTMB(density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + breakpt(phi_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = tweedie(link = "log"),
-                 spatiotemporal = "IID",
-                 spatial = "off",
-                 spatial_varying = ~0 + quarter_f,
-                 time = "year")
-    print("m6")
-    sanity(m6)
-    dd$m6_res <- residuals(m6)
     
-    # logistic metabolic index!
-    # m7 <- update(m1, density ~ 0 + year_f + quarter_f + sal_sc + depth_sc + depth_sq + logistic(phi_sc))
-    # print("m7")
-    # sanity(m7)
-    # dd$m7_res <- residuals(m7)
-    
-    # Plot residuals
-    p1 <- dd %>%
-      dplyr::select(m0_res, m1_res, m2_res, m3_res, m5_res, m6_res) %>%
-      pivot_longer(everything()) %>%
-      ggplot(aes(sample = value)) +
-      stat_qq(size = 0.75, shape = 21, fill = NA) +
-      facet_wrap(~name) +
-      stat_qq_line() +
-      labs(y = "Sample Quantiles", x = "Theoretical Quantiles") +
-      theme(aspect.ratio = 1)
-    
-    print(p1)
-
     # Save AIC
-    data_list_aic[[i]] <- AIC(m0, m1, m2, m3, m5, m6) %>%
-      tibble::rownames_to_column("model") %>%
+    AIC(m0, m1, m2, m3, m4, m5) |>
+      tibble::rownames_to_column("model") |> 
+      arrange(AIC)
+    
+    data_list_aic[[i]] <- AIC(m0, m1, m2, m3, m4, m5) |>
+      tibble::rownames_to_column("model") |>
       mutate(group = i)
     
 }
@@ -328,102 +264,4 @@ for(i in unique(d$group)) {
 data_aic <- bind_rows(data_list_aic)
 
 write_csv(data_aic, paste0(home, "/output/data_aic_01.csv"))
-```
-
-## Plot meshes in a single plot using patchwork
-
-```{r}
-g1 <- d %>% filter(group == unique(d$group)[1])
-mesh_g1 <- make_mesh(g1, xy_cols = c("X", "Y"), cutoff = 15)
-
-g2 <- d %>% filter(group == unique(d$group)[5])
-mesh_g2 <- make_mesh(g2, xy_cols = c("X", "Y"), cutoff = 15)
-
-g3 <- d %>% filter(group == unique(d$group)[3])
-mesh_g3 <- make_mesh(g3, xy_cols = c("X", "Y"), cutoff = 15)
-
-g4 <- d %>% filter(group == unique(d$group)[2])
-mesh_g4 <- make_mesh(g4, xy_cols = c("X", "Y"), cutoff = 15)
-
-g5 <- d %>% filter(group == unique(d$group)[6])
-mesh_g5 <- make_mesh(g5, xy_cols = c("X", "Y"), cutoff = 15)
-
-g6 <- d %>% filter(group == unique(d$group)[4])
-mesh_g6 <- make_mesh(g6, xy_cols = c("X", "Y"), cutoff = 15)
-
-
-p1 <- ggplot() +
-  inlabru::gg(mesh_g1$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g1, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g1$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g1$group[1], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-  
-p2 <- ggplot() +
-  inlabru::gg(mesh_g2$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g2, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g2$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g2$group[], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.x = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-
-p3 <- ggplot() +
-  inlabru::gg(mesh_g3$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g3, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g3$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g3$group[], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.x = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-
-p4 <- ggplot() +
-  inlabru::gg(mesh_g4$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g4, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g4$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g4$group[], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-
-p5 <- ggplot() +
-  inlabru::gg(mesh_g5$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g5, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g5$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g5$group[], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.y = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-
-p6 <- ggplot() +
-  inlabru::gg(mesh_g6$mesh) +
-  coord_fixed() +
-  geom_point(aes(X, Y), data = g6, alpha = 0.2, size = 0.5) +
-  annotate("text", -Inf, Inf, label = paste("n knots = ", mesh_g6$mesh$n), hjust = -0.1, vjust = 2, size = 2.5) + 
-  labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(g6$group[], "_", " "))) +
-  theme_sleek(base_size = 8) +
-  theme(axis.title.x = element_blank(),
-        axis.title.y = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"))
-
-p1 + p2 + p3 + p4 + p5 + p6
-
-ggsave(paste0(home, "/figures/supp/mesh.pdf"), width = 17, height = 11, units = "cm", device = cairo_pdf)
 ```
