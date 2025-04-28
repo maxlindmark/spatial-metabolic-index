@@ -150,6 +150,20 @@ for (i in unique(hind$year_month)) {
 wide <- bind_rows(env_list)
 ```
 
+```{r}
+# TODO: truncate 0; negative means oxygen is depleted
+wide |> 
+  filter(year > 2000 & year < 2017) |> 
+  pivot_longer(c(oxy, oxy_n)) |> 
+  ggplot(aes(value, fill = name)) + 
+  geom_density(alpha = 0.4)
+
+wide |> 
+  filter(year > 2000 & year < 2017) |> 
+  pivot_longer(c(oxy, oxy_n)) |> 
+  summarise(minvalue = min(value, na.rm = TRUE), .by = name)
+```
+
 Read in old hindcast data (prior to copernicus)
 
 ```{r}

@@ -31,12 +31,12 @@ library(patchwork)
 library(concaveman)
 library(ggtext)
 
-# Source code for map plots
-devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
-options(ggplot2.continuous.colour = "viridis")
-
 # Set path
 home <- here::here()
+
+# Source code for map plots
+source(paste0(home, "/R/functions/map-plot.R"))
+options(ggplot2.continuous.colour = "viridis")
 ```
 
 ## Load data
@@ -52,122 +52,102 @@ d_old <- read_csv(paste0(home, "/output/rf_dat_long.csv"))
 ```{r}
 pal <- brewer.pal(n = 11, name = "RdYlBu")
 
+pp <- plot_map + 
+  theme_sleek(base_size = 8) +
+  theme(legend.position = c(0.25, 0.8),
+        legend.title = element_text(size = 7),
+        legend.key.height = unit(0.25, "line"),
+        legend.key.width = unit(0.5, "line"),
+        legend.direction = "horizontal",
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        plot.title = element_text(size = 7))
+
 # Because they are on different scales, I'll build the plot using patchwork instead of e.g. pivot longer
 # First row, temperature
-p1 <- plot_map_labels_fc + 
+p1 <- pp + 
   geom_raster(data = d, aes(X*1000, Y*1000, fill = mean_temp), alpha = 0.9) +
   scale_fill_viridis(option = "magma", name = "°C") +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.2, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        legend.title = element_text(size = 6),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0), "cm"),
-        plot.title = element_text(size = 7)) +
   geom_sf(color = "gray30") +
-  annotate("text", label = "Sweden", x = xmin2 + 0.3*xrange, y = ymin2 + 0.6*yrange, color = "gray50", size = 1.7) +
-  annotate("text", label = "Denmark", x = xmin2 + 0.012*xrange, y = ymin2 + 0.32*yrange, color = "gray50", size = 1.7, angle = 75) +
-  annotate("text", label = "Germany", x = xmin2 + 0.07*xrange, y = ymin2 + 0.02*yrange, color = "gray50", size = 1.7) +
-  annotate("text", label = "Poland", x = xmin2 + 0.58*xrange, y = ymin2 + 0.02*yrange, color = "gray50", size = 1.7) +
-  annotate("text", label = "Russia", x = xmin2 + 0.95*xrange, y = ymin2 + 0.18*yrange, color = "gray50", size = 1.7) +
-  annotate("text", label = "Lithuania", x = xmin2 + 1*xrange, y = ymin2 + 0.43*yrange, color = "gray50", size = 1.7, angle = 75) +
-  annotate("text", label = "Latvia", x = xmin2 + 0.99*xrange, y = ymin2 + 0.65*yrange, color = "gray50", size = 1.7, angle = 75) +
-  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  annotate("text", label = "SE", x = xmin2 + 0.3*xrange, y = ymin2 + 0.6*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "DK", x = xmin2 + 0.012*xrange, y = ymin2 + 0.32*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "DE", x = xmin2 + 0.07*xrange, y = ymin2 + 0.02*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "PL", x = xmin2 + 0.58*xrange, y = ymin2 + 0.02*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "RU", x = xmin2 + 0.95*xrange, y = ymin2 + 0.18*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "LT", x = xmin2 + 1*xrange, y = ymin2 + 0.43*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "LV", x = xmin2 + 0.99*xrange, y = ymin2 + 0.65*yrange, color = "gray30", size = 2) +
+  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
 
-p2 <- plot_map_fc + 
+p2 <- pp + 
   geom_raster(data = d, aes(X*1000, Y*1000, fill = temp_slope), alpha = 0.9) +
-  scale_fill_gradient2(name = "°C/decade", high = pal[11], low = pal[1]) + 
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.26, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0.25), "cm"),
-        legend.title = element_text(size = 6),
-        plot.title = element_text(size = 7)) +
+  scale_fill_gradient2(name = "°C/decade", high = pal[11], low = pal[1],
+                       breaks = c(round(as.numeric(quantile(d$temp_slope, 0.1)), digits = 1),
+                                  round(as.numeric(median(d$temp_slope)), digits = 1),
+                                  round(as.numeric(quantile(d$temp_slope, 0.9)), digits = 1))) + 
   geom_sf(color = "gray30") +
-  annotate("text", label = "(b)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  annotate("text", label = "(b)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
 
-p3 <- plot_map_fc + 
+p3 <- pp + 
   geom_raster(data = d |> drop_na(temp_vel), aes(X*1000, Y*1000, fill = temp_vel), alpha = 0.9) +
   scale_fill_gradient2(name = "Km/decade", high = pal[11], low = pal[1]) + 
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.27, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0.25), "cm"),
-        legend.title = element_text(size = 6),
-        plot.title = element_text(size = 7)) +
   geom_sf(color = "gray30") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
   facet_wrap(~"Temperature", strip.position = "right") +
-  annotate("text", label = "(c)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
+  annotate("text", label = "(c)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
 
-p4 <- plot_map_fc + 
+p4 <- pp + 
   geom_raster(data = d, aes(X*1000, Y*1000, fill = mean_oxy), alpha = 0.9) +
   scale_fill_viridis(option = "mako", 
                      name = expression(paste("O"[2], " (ml/L)"))) +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.25, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        plot.margin = unit(c(0,0,0,0.25), "cm"),
-        legend.title = element_text(size = 6),
-        axis.title.x = element_blank(),
-        plot.title = element_text(size = 7)) + 
   geom_sf(color = "gray30") +
-  annotate("text", label = "(d)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
+  theme(axis.title.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  annotate("text", label = "(d)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
 
-p5 <- plot_map_fc + 
+p5 <- pp + 
   geom_raster(data = d, aes(X*1000, Y*1000, fill = oxy_slope), alpha = 0.9) +
-  scale_fill_gradient2(name = expression(paste("O"[2], "/decade")), high = pal[11], low = pal[1]) +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.28, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        plot.margin = unit(c(0,0,0,0.25), "cm"),
-        legend.title = element_text(size = 6),
-        plot.title = element_text(size = 7)) +
+  scale_fill_gradient2(name = expression(paste("O"[2], "/decade")), high = pal[11], low = pal[1],
+                       breaks = c(round(as.numeric(quantile(d$oxy_slope, 0.01)), digits = 1),
+                                  #round(as.numeric(median(d$oxy_slope)), digits = 2),
+                                  round(as.numeric(quantile(d$oxy_slope, 0.99)), digits = 1))) +
   geom_sf(color = "gray30") +
-  annotate("text", label = "(e)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
-
-p6 <- plot_map_fc + 
-  geom_raster(data = d |> drop_na(oxy_vel), aes(X*1000, Y*1000, fill = oxy_vel), alpha = 0.9) +
-  scale_fill_gradient2(name = "Km/decade", high = pal[11], low = pal[1]) +
-  theme_sleek(base_size = 8) +
-  theme(legend.position = c(0.255, 0.73),
-        legend.key.height = unit(0.4, "line"),
-        legend.key.width = unit(0.2, "line"),
+  theme(axis.title.y = element_blank(),
         axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.title.y = element_blank(),
-        axis.title.x = element_blank(),
-        plot.margin = unit(c(0,0,0,0.25), "cm"),
-        legend.title = element_text(size = 6),
-        plot.title = element_text(size = 7)) +
+        axis.ticks.y = element_blank()) +
+  annotate("text", label = "(e)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
+
+p6 <- pp + 
+  geom_raster(data = d |> drop_na(oxy_vel), aes(X*1000, Y*1000, fill = oxy_vel), alpha = 0.9) +
+  scale_fill_gradient2(name = "Km/decade", high = pal[11], low = pal[1],
+                       scale_fill_gradient2(name = "°C/decade", high = pal[11], low = pal[1])) +
   facet_wrap(~"Oxygen", strip.position = "right") +
   geom_sf(color = "gray30") +
-  annotate("text", label = "(f)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.2, color = "gray40", size = 2.5)
+  theme(axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  annotate("text", label = "(f)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.9, color = "gray40", size = 3)
 
-((p1 + p2 + p3) / (p4 + p5 + p6)) + plot_layout(axes = "collect")
+((p1 + p2 + p3) / (p4 + p5 + p6)) &
+  theme(axis.text = element_text(size = 8),
+        axis.title = element_text(size = 10),
+        strip.text = element_text(size = 9))
 
-ggsave(paste0(home, "/figures/env_vars_space.pdf"), width = 12.5, height = 7.5, units = "cm")
+ggsave(paste0(home, "/figures/env_vars_space.pdf"), width = 17, height = 10, units = "cm")
 ```
 
 ## Now do biotic variables... add here the boundary!
@@ -235,11 +215,11 @@ plot_map_fc +
   geom_sf(color = "gray30") +
   geom_path(data = domain, aes(X*1000, Y*1000), color = "red", linewidth = 0.3, linetype = 2) + 
   labs(fill = "Multiplicative change\nin biomass density\nper decade") +
-  theme(legend.position = c(0.084, 0.915),
-        legend.key.height = unit(0.5, "line"),
-        legend.key.width = unit(0.25, "line"),
-        legend.title = element_text(size = 6.4),
-        legend.direction = "vertical",
+  theme(legend.position = c(0.09, 0.92),
+        legend.direction = "horizontal",
+        legend.key.height = unit(0.25, "line"),
+        legend.key.width = unit(0.6, "line"),
+        legend.title = element_text(size = 6.8),
         plot.title = element_text(size = 7))
 
 ggsave(paste0(home, "/figures/spatial_trends.pdf"), width = 18, height = 17, units = "cm")
