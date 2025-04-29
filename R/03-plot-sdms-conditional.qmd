@@ -118,9 +118,9 @@ ggplot(preds, aes(temp, oxy, fill = est_sc)) +
   geom_contour(aes(temp, oxy, z = est_sc), color = "grey95", bins = 15, size = 0.3, alpha = 0.5) +
   geom_point(data = wq, aes(Median_temp, Median_oxy, color = as.factor(quarter)), inherit.aes = FALSE) +
   geom_errorbar(data = wq, aes(Median_temp, Median_oxy, xmin = `25_temp`, xmax = `75_temp`, color = as.factor(quarter)), inherit.aes = FALSE,
-                linewidth = 1.5, alpha = 0.5) +
+                alpha = 0.5) +
   geom_errorbar(data = wq, aes(Median_temp, Median_oxy, ymin = `25_oxy`, ymax = `75_oxy`, color = as.factor(quarter)), inherit.aes = FALSE,
-                linewidth = 1.5, alpha = 0.5) +
+                alpha = 0.5) +
   # geom_errorbar(data = wq, aes(Median_temp, Median_oxy, xmin = `10_temp`, xmax = `90_temp`, color = as.factor(quarter)), inherit.aes = FALSE,
   #               alpha = 0.5) +
   # geom_errorbar(data = wq, aes(Median_temp, Median_oxy, ymin = `10_oxy`, ymax = `90_oxy`, color = as.factor(quarter)), inherit.aes = FALSE,
@@ -131,7 +131,7 @@ ggplot(preds, aes(temp, oxy, fill = est_sc)) +
   labs(y = "Oxygen (ml/L)", 
        x = "Temperature (°C)",
        color = "Quarter",
-       fill = expression(paste("Scaled biomass density (kg/km"^2, ")"))) +
+       fill = expression(paste("Scaled biomass density (kg km"^-2, ")"))) +
   theme(legend.position = "bottom", 
         legend.key.width = unit(1, "cm"),
         legend.title.position = "top") +
