@@ -136,8 +136,7 @@ bits_hh <- bits_hh |>
 
 # Now add the fishing line information from the sweep file (we need that later to standardize based on gear geometry). We add in the the HH data and then transfer it to the other exchange data files when left_joining. Check which Fishing lines I have in the sweep data:
 fishing_line <- newsweep |>
-  group_by(Gear) |>
-  distinct(Fishing.line)
+  distinct(Gear, Fishing.line) 
 
 bits_hh <- left_join(bits_hh, fishing_line, by = "Gear")
 

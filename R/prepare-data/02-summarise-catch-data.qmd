@@ -245,7 +245,7 @@ write_csv(sizes, paste0(home, "/data/clean/sizes.csv"))
 # Therefore I will calculate the adult and juvenile biomass separately, then do the empty hauls (and dubplicate that by life stage)
 d_sum <- d |>  
   drop_na(length_cm) |> 
-  left_join(sizes |> dplyr::select(species, mat_length)) |> 
+  left_join(sizes |> distinct(species, mat_length)) |> 
   mutate(life_stage = ifelse(length_cm > mat_length, "adult", "juvenile")) |>
   summarise(density = sum(biomass_density), .by = c(haul_id, species, life_stage)) 
 
