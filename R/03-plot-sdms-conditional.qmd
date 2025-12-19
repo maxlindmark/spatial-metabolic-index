@@ -37,7 +37,7 @@ library(RColorBrewer)
 library(here)
 library(ggnewscale)
 library(ggh4x)
-
+library(egg)
 
 devtools::source_url("https://raw.githubusercontent.com/maxlindmark/spatial-metabolic-index/main/R/functions/map-plot.R")
 options(ggplot2.continuous.colour = "viridis")
@@ -52,127 +52,265 @@ home <- here::here()
 ## Read predictions
 
 ```{r}
+#| warning: false
+#| message: false
+
 preds <- read_csv(paste0(home, "/output/conditional_02_sdms.csv")) |> 
   filter(oxy > 3 & oxy < 9) |>
   filter(temp > 2 & temp < 14) |>
   separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
   mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) |> 
+         life_stage = str_to_title(life_stage),
+         group2 = paste(species, life_stage),
+         group2 = factor(group2, 
+                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+                                    "Plaice Adult", "Plaice Juvenile", "Dab All"))) |> 
   mutate(est_sc = exp(est)/max(exp(est)),
          .by = group)  # for plotting all together in heatmap
 
-grid_preds <- read_csv(paste0(home, "/output/pred_grids_02_sdms.csv")) %>% 
-  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) %>% 
+grid_preds <- read_csv(paste0(home, "/output/pred_grids_02_sdms.csv")) |>
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
   mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage))
+         life_stage = str_to_title(life_stage),
+         group2 = paste(species, life_stage),
+         group2 = factor(group2, 
+                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+                                    "Plaice Adult", "Plaice Juvenile", "Dab All"))) |> 
+  mutate(est = exp(est1 + est2))
 
 cogs <- read_csv(paste0(home, "/output/cogs_02_sdms.csv")) |> 
   separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
   mutate(species = str_to_title(species),
          life_stage = str_to_title(life_stage))
+
+# eaos <- read_csv(paste0(home, "/output/eaos_02_sdms.csv")) |> 
+#   separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+#   mutate(species = str_to_title(species),
+#          life_stage = str_to_title(life_stage),
+#          group2 = paste(species, life_stage),
+#          group2 = factor(group2, 
+#                          levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+#                                     "Plaice Adult", "Plaice Juvenile", "Dab All")))
+
+index <- read_csv(paste0(home, "/output/index_02_sdms.csv")) |> 
+  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
+  mutate(species = str_to_title(species),
+         life_stage = str_to_title(life_stage),
+         group2 = paste(species, life_stage),
+         group2 = factor(group2, 
+                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+                                    "Plaice Adult", "Plaice Juvenile", "Dab All")))
+```
+
+## Effective area occupied
+
+```{r}
+#| warning: false
+#| message: false
+
+# EAO captures both range size AND within-range density patterns. It's a composite metric.
+# If EAO goes up: Index growing faster than mean density, OR Mean density declining faster than index
+# Interpretation: Population spread over larger effective area (could be range expansion OR spreading thin)
+# 
+# If EAO goes down: Mean density growing faster than index, OR Index declining faster than mean density
+# Interpretation: Population in smaller effective area (could be range contraction OR concentrating)
+# 
+# EAO stable: Effective spatial footprint unchanged. Abundance changes are proportional to density changes
+#
+# EAO: If I redistributed all the individuals uniformly, how much area would they cover at the observed mean density?
+#
+# Maybe its better to just show two trends: # cells above X and index (2 plots color by group)
+
+# EAO
+# ggplot(eaos, aes(year, est, color = group2)) + 
+#   geom_point() + 
+#   labs(y = "EAO", x = "Year") +
+#   theme(legend.position = "bottom",
+#         legend.title = element_blank()) +
+#   scale_color_brewer(palette = "Paired") +
+#   #facet_wrap(~group2, scales = "free") +
+#   geom_smooth(method = "gam", formula = y~s(x, k=3), se = FALSE)
+
+# Trends in index and area occupied
+# https://sdmtmb.github.io/sdmTMB/articles/poisson-link.html inverse link of est1 to get 
+grid_preds$encounter <- 1 - exp(-exp(grid_preds$est1))
+
+n_cell <- grid_preds |> 
+  filter(group == "cod_juvenile" & quarter == 4 & year == max(year)) |> 
+  summarise(n = n()) |> pull(n)
+
+encounter_sum <- grid_preds |> 
+  filter(quarter == 4) |> 
+  filter(encounter > 0.9) |> 
+  summarise(n = n(),
+            .by = c(year, group2)) |> 
+  mutate(est_sc = n / n_cell)
+
+dd <- bind_rows(
+  index |> mutate(metric = "Scaled biomass Index") |> mutate(est_sc = est/mean(est), .by = c(metric, group2)),
+  encounter_sum |> mutate(metric = "Fraction cells with >.9 probability of occurence")
+  )
+
+p1 <- dd |> 
+  ggplot(aes(year, est_sc, color = group2)) + 
+  geom_point(alpha = 0.75, size = 0.8) + 
+  facet_wrap(~metric, scales = "free", ncol = 2) +
+  labs(y = "Value", x = "Year") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+  scale_color_brewer(palette = "Paired") +
+  geom_smooth(method = "gam", formula = y~s(x, k = 5), se = FALSE)
+
+tag_facet(p1, fontface = 1, col = "gray30", size = 3)
+
+ggsave(paste0(home, "/figures/area_index_trends.pdf"), width = 19, height = 11, units = "cm")
+
+
+# Correlation between area occupied and index
+mean_dens <- grid_preds |> 
+  filter(quarter == 4) |> 
+  summarise(mean_dens = median(exp(est1 + est2)),
+            .by = c(year, group2))
+
+cor_dat <- index |> 
+  left_join(encounter_sum |> rename(prop = est_sc), by = c("group2", "year")) |>
+  left_join(mean_dens, by = c("group2", "year"))
+
+cor_dat |> 
+  mutate(est_sc = est/max(est), .by = group2) |> 
+  ggplot(aes(log(mean_dens), prop, color = est_sc)) +
+  facet_wrap(~ group2, scales = "free") +
+  geom_point()
+
+cor_stats <- cor_dat |>
+  summarise(
+    cor_test = list(cor.test(log(est), prop)),
+    cor = cor_test[[1]]$estimate,
+    ci_lower = cor_test[[1]]$conf.int[1],
+    ci_upper = cor_test[[1]]$conf.int[2],
+    p_value = cor_test[[1]]$p.value,
+    .by = group2
+  ) |> 
+  mutate(
+    label = sprintf("r = %.2f\n95%% CI [%.2f, %.2f]", cor, ci_lower, ci_upper)
+  )
+
+cor_dat |> 
+  mutate(mean_dens_sc = mean_dens / mean(mean_dens), .by = group2) |>
+  ggplot(aes(log(est), prop, color = log(mean_dens_sc))) + 
+  facet_wrap(~ group2, scales = "free") +
+  geom_text(
+    data = cor_stats,
+    aes(x = Inf, y = -Inf, label = label),
+    hjust = 1.1, vjust = -0.4,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  labs(color = "log(mean biomass density)",
+       x = "Biomass index",
+       y = "Fraction area occupied") +
+  geom_point() +
+  theme(legend.position.inside = c(0.7, 0.1),
+        legend.direction = "horizontal",
+        legend.key.height = unit(0.45, "line"),
+        legend.key.width = unit(2, "line"),
+        legend.title = element_text(size = 6.8),
+        plot.title = element_text(size = 7)) +
+  guides(colour = guide_colorbar(title.position = "top", title.hjust = 0.5, position = "inside"),
+         fill = guide_colorbar(title.position = "top", title.hjust = 0.5, position = "inside"))
+
+ggsave(paste0(home, "/figures/supp/dens_area_corr.pdf"), width = 18, height = 17, units = "cm")
 ```
 
 ## Calculate weighted quantiles
 
 ```{r}
+#| warning: false
+#| message: false
+
 wq <- grid_preds |> 
-  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.5),
-            "10_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.1),
-            "25_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.25),
-            "75_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.75),
-            "90_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.9),
+  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.5),
+            "10_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.1),
+            "25_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.25),
+            "75_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.75),
+            "90_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.9),
             "Env_oxy" = median(oxy),
             
-            "Median_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.5),
-            "10_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.1),
-            "25_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.25),
-            "75_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.75),
-            "90_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.9),
+            "Median_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.5),
+            "10_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.1),
+            "25_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.25),
+            "75_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.75),
+            "90_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.9),
             "Env_temp" = median(temp),
-            .by = c(group, quarter)) |> 
-  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
-  mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) 
+            .by = c(group2, quarter))
 
 wq_annual <- grid_preds |> 
-  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.5),
-            "1st_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.25),
-            "3rd_oxy" = hutils::weighted_quantile(v = oxy, w = exp(est), p = 0.75),
+  summarise("Median_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.5),
+            "1st_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.25),
+            "3rd_oxy" = hutils::weighted_quantile(v = oxy, w = est, p = 0.75),
             "Env_oxy" = median(oxy),
             
-            "Median_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.5),
-            "1st_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.25),
-            "3rd_temp" = hutils::weighted_quantile(v = temp, w = exp(est), p = 0.75),
+            "Median_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.5),
+            "1st_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.25),
+            "3rd_temp" = hutils::weighted_quantile(v = temp, w = est, p = 0.75),
             "Env_temp" = median(temp),
-            .by = c(group, year, quarter)) |> 
-  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |> 
-  mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage)) 
+            .by = c(group2, year, quarter))
 ```
 
 ## Plot conditional effects
 
 ```{r}
-ggplot(preds, aes(temp, oxy, fill = est_sc)) + 
+#| warning: false
+#| message: false
+
+p1 <- ggplot(preds, aes(temp, oxy, fill = est_sc)) + 
   geom_raster(alpha = 0.95) +
-  geom_contour(aes(temp, oxy, z = est_sc), color = "grey95", bins = 15, size = 0.3, alpha = 0.5) +
+  geom_contour(aes(temp, oxy, z = est_sc), color = "grey95", bins = 15, linewidth = 0.3, alpha = 0.5, inherit.aes = FALSE) +
   geom_point(data = wq, aes(Median_temp, Median_oxy, color = as.factor(quarter)), inherit.aes = FALSE) +
   geom_errorbar(data = wq, aes(Median_temp, Median_oxy, xmin = `25_temp`, xmax = `75_temp`, color = as.factor(quarter)), inherit.aes = FALSE,
                 alpha = 0.5) +
   geom_errorbar(data = wq, aes(Median_temp, Median_oxy, ymin = `25_oxy`, ymax = `75_oxy`, color = as.factor(quarter)), inherit.aes = FALSE,
                 alpha = 0.5) +
-  # geom_errorbar(data = wq, aes(Median_temp, Median_oxy, xmin = `10_temp`, xmax = `90_temp`, color = as.factor(quarter)), inherit.aes = FALSE,
-  #               alpha = 0.5) +
-  # geom_errorbar(data = wq, aes(Median_temp, Median_oxy, ymin = `10_oxy`, ymax = `90_oxy`, color = as.factor(quarter)), inherit.aes = FALSE,
-  #               alpha = 0.5) +
   scale_fill_viridis() +
   scale_color_manual(values = c("grey90", "tomato3")) +
-  facet_wrap(~paste(species, life_stage), ncol = 3) +
+  facet_wrap(~group2, ncol = 4) +
   labs(y = "Oxygen (ml/L)", 
        x = "Temperature (°C)",
        color = "Quarter",
-       fill = expression(paste("Scaled biomass density (kg km"^-2, ")"))) +
-  theme(legend.position = "bottom", 
-        legend.key.width = unit(1, "cm"),
+       fill = expression(atop("Scaled biomass", "density (kg/km"^2*")"))) +
+  guides(fill = guide_colorbar(position = "inside"),
+         color = guide_legend(position = "inside")) +
+  theme(legend.position.inside = c(0.875, 0.2),
+        legend.direction = "horizontal",
+        legend.key.width = unit(0.7, "cm"),
         legend.title.position = "top") +
-  coord_cartesian(xlim = c(2.2, 13.5), 
-                  ylim = c(3.3, 8.8),
-                  expand = 0) +
+  coord_cartesian(expand = 0) +
   NULL
   
-ggsave(paste0(home, "/figures/temp_oxy_conditional.pdf"), width = 17, height = 18, units = "cm")
+tag_facet(p1, fontface = 1, col = "gray95", size = 3)
+
+ggsave(paste0(home, "/figures/temp_oxy_conditional.pdf"), width = 18, height = 10, units = "cm")
 ```
 
 ```{r}
+#| warning: false
+#| message: false
+
 # Oxygen
 wi_median_oxy <- preds |>
   left_join(wq |>
               filter(quarter == 4) |>
-              dplyr::select(group, Median_oxy), by = "group") |>
-  distinct(species, life_stage, Median_oxy) |> 
-  mutate(group2 = paste(species, life_stage),
-         group2 = factor(group2, 
-                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-                                    "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")))
+              dplyr::select(group2, Median_oxy), by = "group2") |>
+  distinct(group2, Median_oxy)
 
 wi_median_temp <- preds |>
   left_join(wq |>
               filter(quarter == 4) |>
-              dplyr::select(group, Median_temp), by = "group") |>
-  distinct(species, life_stage, Median_temp) |> 
-  mutate(group2 = paste(species, life_stage),
-         group2 = factor(group2, 
-                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-                                    "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")))
-
-preds <- preds |> 
-  mutate(group2 = paste(species, life_stage),
-         group2 = factor(group2, 
-                         levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-                                    "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")))
+              dplyr::select(group2, Median_temp), by = "group2") |>
+  distinct(group2, Median_temp)
 
 ggplot() +
-  facet_wrap(~ group2, ncol = 3, scales = "free_y") +
+  facet_wrap(~ group2, ncol = 4, scales = "free_y") +
   geom_vline(data = wi_median_oxy, aes(xintercept = Median_oxy), 
              linetype = 2, alpha = 0.5, linewidth = 0.4) +
   geom_line(data = preds, aes(oxy, est, color = temp, group = temp)) +
@@ -180,60 +318,61 @@ ggplot() +
   labs(x = "Oxygen (ml/L)",
        y = expression(paste("Log biomass density (kg/km"^2, ")")),
        color = "Temperature (°C)") +
-  theme(legend.position.inside = c(0.08, 0.57),
+  theme(legend.position.inside = c(0.88, 0.17),
         legend.key.width = unit(0.4, "cm"),
         legend.key.height = unit(0.2, "cm")) +
-  guides(color = guide_legend(position = "inside")) +
-  NULL
+  guides(color = guide_legend(position = "inside"))
 
-ggsave(paste0(home, "/figures/supp/oxy_conditional.pdf"), width = 22, height = 16, units = "cm")
+ggsave(paste0(home, "/figures/supp/oxy_conditional.pdf"), width = 19, height = 10, units = "cm")
 
 # Temperature
 ggplot() +
-  facet_wrap(~ group2, ncol = 3, scales = "free_y") +
+  facet_wrap(~ group2, ncol = 4, scales = "free_y") +
   geom_vline(data = wi_median_temp, aes(xintercept = Median_temp), 
              linetype = 2, alpha = 0.5, linewidth = 0.4) +
   geom_line(data = preds, aes(temp, est, color = oxy, group = oxy)) +
   labs(x = "Temperature (°C)",
        y = expression(paste("Log biomass density (kg/km"^2, ")")),
        color = "Oxygen (ml/L)") +
-  theme(legend.position.inside = c(0.07, 0.57),
+  theme(legend.position.inside = c(0.88, 0.17),
         legend.key.width = unit(0.4, "cm"),
         legend.key.height = unit(0.2, "cm")) +
-  guides(color = guide_legend(position = "inside")) +
-  NULL
+  guides(color = guide_legend(position = "inside"))
 
-ggsave(paste0(home, "/figures/supp/temp_conditional.pdf"), width = 22, height = 16, units = "cm")
+ggsave(paste0(home, "/figures/supp/temp_conditional.pdf"), width = 19, height = 10, units = "cm")
 ```
 
 ## Plot weighted quantiles over time
 
 ```{r}
+#| warning: false
+#| message: false
+
 t <- wq_annual |>
   pivot_longer(c("Median_oxy", `1st_oxy`, `3rd_oxy`, "Env_oxy", "Median_temp", `1st_temp`, `3rd_temp`, "Env_temp")) |>
   mutate(var = ifelse(grepl("oxy", name), "Oxygen", "Temperature"),
-         type = ifelse(grepl("Env", name), "Environment", "Biomass-weighted")) |>
-  separate(group, c("species", "life_stage"), sep = "_", remove = FALSE) |>
-  mutate(species = str_to_title(species),
-         life_stage = str_to_title(life_stage),
-         group2 = paste(species, life_stage, sep = " ")) |>
+         type = ifelse(grepl("Env", name), "Environment", "Biomass-weighted")) |> 
   filter(name %in% c("Median_oxy", "Median_temp", "Env_oxy", "Env_temp"))
    
+unique(t$type)
+
 t_env <- t |>
-  filter(type == "Environment" & group == "cod_adult") |>
+  filter(type == "Environment" & group2 == "Cod Adult") |>
   mutate(group2 = "Environment")
  
 # Plot the slopes over time for group and quarter, compare to the environment slope.
 s_slopes <- t |> filter(!type == "Environment") |>
-  mutate(id = paste(group, var, quarter, sep = "_")) |> 
+  mutate(id = paste(group2, var, quarter, sep = "_")) |> 
   ungroup() |> 
   dplyr::select(year, id, value)
 
 t_slopes <- t_env |>
-  mutate(id = paste("Environment", group2, var, quarter, sep = "_")) |> 
+  mutate(id = paste(group2, var, quarter, sep = "_")) |> 
   dplyr::select(year, id, value)
 
 slopes <- bind_rows(s_slopes, t_slopes)
+
+unique(slopes$id)
 
 # Calculate slopes over time
 slopes2 <- slopes %>%
@@ -247,29 +386,20 @@ slopes2 <- slopes %>%
   rename(id = Year, 
          year_slope = estimate) |> 
   dplyr::select(id, year_slope, sig, lwr, upr) |> 
-  separate(id, into = c("species", "life_stage", "variable", "quarter"), remove = FALSE) |> 
-  mutate(group3 = paste(str_to_title(species), str_to_title(life_stage)),
-         x = "x") |> 
+  separate(id, sep = "_", into = c("group2", "variable", "quarter"), remove = FALSE) |> 
   mutate(quarter2 = ifelse(quarter == 1, "Quarter 1", "Quarter 4"))
   
 vlines <- slopes2 |> 
-  filter(species == "Environment")
-
-slopes2 |> 
-  filter(!species == "Environment") |> 
-  distinct(group3)
+  filter(group2 == "Environment")
 
 order <- c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-           "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")  
+           "Plaice Adult", "Plaice Juvenile", "Dab All")
 
-#display.brewer.pal(name = "Paired", n = 12)
-pal <- brewer.pal(n = 12, name = "Paired")[c(1:6, 8, 10, 12)]
-#scales::show_col(pal)
+slopes2$group2 <- factor(slopes2$group2, levels = order)
 
-slopes2 |> 
-  filter(!species == "Environment") |> 
-  mutate(group3 = factor(group3, levels = order)) |> 
-  ggplot(aes(year_slope*10, group3, xmin = lwr*10, xmax = upr*10, color = group3)) + 
+p1 <- slopes2 |> 
+  filter(!group2 == "Environment") |> 
+  ggplot(aes(year_slope*10, group2, xmin = lwr*10, xmax = upr*10, color = group2)) + 
   geom_rect(data = vlines, aes(ymin = -Inf, ymax = Inf, xmin = lwr*10, xmax = upr*10, fill = "Env. slope 95% CI"),
             inherit.aes = FALSE, alpha = 0.1) +
   geom_vline(xintercept = 0, linetype = 3, color = "tomato2", alpha = 1) +
@@ -279,7 +409,7 @@ slopes2 |>
   facet_grid2(quarter2 ~ variable, scales = "free_x") +
   scale_fill_manual(values = "grey10") +
   scale_linetype_manual(values = 2) +
-  scale_color_manual(values = pal) +
+  scale_color_brewer(palette = "Paired") +
   labs(color = "", x = "Change in variable per decade", linetype = "", fill = "", y = "") +
   theme(legend.position.inside = c(0.37, 0.08),
         legend.spacing.y = unit(-0.85, "cm")) +
@@ -288,53 +418,9 @@ slopes2 |>
          fill = guide_legend(position = "inside")) +
   NULL
 
-ggsave(paste0(home, "/figures/decadal_slopes.pdf"), width = 17, height = 13, units = "cm")
-```
+library(egg)
 
-## Plot centrs of gravity
+tag_facet(p1, fontface = 1, col = "gray30", size = 3)
 
-```{r}
-# plot_map +
-#   geom_point(data = cogs, aes(est_x, est_y, color = year), size = 0.5) +
-#   geom_errorbar(data = cogs, aes(y = est_y, xmin = lwr_x, xmax = upr_x, color = year),
-#                 width = 0, alpha = 0.3, linewidth = 0.3) +
-#   geom_errorbar(data = cogs, aes(x = est_x, ymin = lwr_y, ymax = upr_y, color = year),
-#                 width = 0, alpha = 0.3, linewidth = 0.3) +
-#   geom_path(data = cogs, aes(est_x, est_y, color = year), linewidth = 0.3) + 
-#   facet_wrap(~ paste(life_stage, species)) + 
-#   labs(color = "Year") +
-#   theme(legend.position = c(0.05, 0.85),
-#         legend.key.height = unit(0.3, "cm"),
-#         legend.key.width = unit(0.1, "cm"))
-# 
-# ggsave(paste0(home, "/figures/supp/cogs_map.pdf"), width = 17, height = 11, units = "cm")
-# 
-# pal <- brewer.pal(name = "Dark2", n = 8)[3:8]
-# 
-# cogs <- cogs |> 
-#   mutate(group2 = paste(species, life_stage, sep = " "))
-# 
-# p1 <- ggplot(cogs, aes(year, est_x, color = group2, fill = group2)) + 
-#   geom_ribbon(aes(ymin = lwr_x, ymax = upr_x), color = NA, alpha = 0.3) + 
-#   geom_line() + 
-#   # scale_color_manual(values = c(pal)) + 
-#   # scale_fill_manual(values = c(pal)) + 
-#   guides(color = "none", fill = "none") +
-#   labs(x = "", y = "UTM X center of gravity", color = "", fill = "")
-# 
-# p2 <- ggplot(cogs, aes(year, est_y, color = group2, fill = group2)) + 
-#   geom_ribbon(aes(ymin = lwr_y, ymax = upr_y), color = NA, alpha = 0.3) + 
-#   geom_line() + 
-#   # scale_color_manual(values = c(pal)) + 
-#   # scale_fill_manual(values = c(pal)) + 
-#   guides(color = guide_legend(nrow = 2)) +
-#   labs(x = "", y = "UTM Y center of gravity", color = "", fill = "") +
-#   theme(legend.position = "bottom",
-#         legend.spacing.y = unit(-2, 'cm'),
-#         legend.spacing.x = unit(0, 'cm'),
-#         legend.background = element_rect(fill = NA))
-# 
-# p1 / p2
-# 
-# ggsave(paste0(home, "/figures/supp/cogs.pdf"), width = 17, height = 20, units = "cm")
+ggsave(paste0(home, "/figures/decadal_slopes.pdf"), width = 18, height = 13, units = "cm")
 ```

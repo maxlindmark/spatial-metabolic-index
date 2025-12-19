@@ -54,8 +54,6 @@ data/NEMO_Nordic_SCOBI
 data/substrate_tif/
 
 data/clean/catch_by_length.csv
-data/clean/pred_grid_(1_2).csv
-data/clean/pred_grid_(2_2).csv
 
 # Output
 output/

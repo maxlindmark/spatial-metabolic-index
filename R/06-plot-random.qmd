@@ -42,9 +42,7 @@ options(ggplot2.continuous.colour = "viridis")
 ## Load data
 
 ```{r}
-d <- read_csv(paste0(home, "/output/rf_dat_short.csv"))
-
-d_old <- read_csv(paste0(home, "/output/rf_dat_long.csv"))
+d <- read_csv(paste0(home, "/output/rf_dat_long.csv"))
 ```
 
 ## Plot environmental variables!
@@ -83,9 +81,7 @@ p1 <- pp +
 p2 <- pp + 
   geom_raster(data = d, aes(X*1000, Y*1000, fill = temp_slope), alpha = 0.9) +
   scale_fill_gradient2(name = "°C/decade", high = pal[11], low = pal[1],
-                       breaks = c(round(as.numeric(quantile(d$temp_slope, 0.1)), digits = 1),
-                                  round(as.numeric(median(d$temp_slope)), digits = 1),
-                                  round(as.numeric(quantile(d$temp_slope, 0.9)), digits = 1))) + 
+                       breaks = c(0, 0.6, 1.2)) + 
   geom_sf(color = "gray30") +
   theme(axis.title.x = element_blank(),
         axis.text.x = element_blank(),
@@ -97,7 +93,8 @@ p2 <- pp +
 
 p3 <- pp + 
   geom_raster(data = d |> drop_na(temp_vel), aes(X*1000, Y*1000, fill = temp_vel), alpha = 0.9) +
-  scale_fill_gradient2(name = "Km/decade", high = pal[11], low = pal[1]) + 
+  scale_fill_gradient2(name = "Km/decade", high = pal[11], low = pal[1],
+                       breaks = c(0, 250, 500)) + 
   geom_sf(color = "gray30") +
   theme(axis.title.x = element_blank(),
         axis.text.x = element_blank(),
@@ -170,24 +167,6 @@ full_grid_trends <- full_grid |>
 
 trend <- bind_rows(trend, full_grid_trends)
 
-# Now do old time series
-trend_old <- d_old |>
-  filter(cumulative == "Y") |> 
-  mutate(id = paste(X, Y, group, sep = "_"))
-
-# Read the prediction grid and join all grid cells so that I can color the filtered cells as NA
-full_grid_old <- crossing(d_old |> dplyr::select(X, Y),
-                          group = unique(trend_old$group)) |>
-  mutate(id = paste(X, Y, group, sep = "_"))
-
-full_grid_trends_old <- full_grid_old |>
-  filter(!id %in% unique(trend_old$id)) |> 
-  mutate(mean_biom = NA, 
-         biom_trend = NA)
-
-trend_old <- bind_rows(trend_old, full_grid_trends_old)
-
-
 # Because we trim the grids, let's add a polygon that is the overall outside border.
 border_df <- trend
 z <- concaveman(cbind(border_df$X, border_df$Y), concavity = 1)
@@ -196,9 +175,7 @@ z_poly <- sp::SpatialPolygons(list(sp::Polygons(list(sp::Polygon(z)), ID = 1)))
 domain <- as.data.frame(z_poly@polygons[[1]]@Polygons[[1]]@coords)
 colnames(domain) <- c("X", "Y")
 
-trend2 <- bind_rows(trend, trend_old)
-
-trend2 <- trend2 |> 
+trend <- trend |> 
   separate_wider_delim(group, delim = "_", names = c("species", "life_stage"), cols_remove = FALSE) |> 
   mutate(life_stage = str_to_sentence(life_stage),
          species = str_to_sentence(species)) |> 
@@ -208,29 +185,19 @@ trend2 <- trend2 |>
                                     "Plaice Adult", "Plaice Juvenile", "Turbot All", "Whiting All", "Dab All")))
 
 plot_map_fc + 
-  geom_raster(data = trend2, aes(X*1000, Y*1000, fill = biom_trend), alpha = 0.9) +
+  geom_raster(data = trend, aes(X*1000, Y*1000, fill = biom_trend), alpha = 0.9) +
   scale_fill_gradient2(na.value="grey94", trans = "log10", midpoint = 0,
                         low = pal[1], high = pal[11]) +
-  facet_wrap(~group2) +
+  facet_wrap(~group2, ncol = 4) +
   geom_sf(color = "gray30") +
   geom_path(data = domain, aes(X*1000, Y*1000), color = "red", linewidth = 0.3, linetype = 2) + 
   labs(fill = "Multiplicative change\nin biomass density\nper decade") +
-  theme(legend.position = c(0.09, 0.92),
+  guides(fill = guide_colorbar(position = "inside")) +
+  theme(legend.position.inside = c(0.89, 0.2),
         legend.direction = "horizontal",
-        legend.key.height = unit(0.25, "line"),
-        legend.key.width = unit(0.6, "line"),
-        legend.title = element_text(size = 6.8),
+        legend.key.width = unit(0.5, "cm"),
+        legend.title.position = "top",
         plot.title = element_text(size = 7))
 
-ggsave(paste0(home, "/figures/spatial_trends.pdf"), width = 18, height = 17, units = "cm")
-
-# t <- read_csv(paste0(home, "/output/rf_dat_short.csv"))
-# 
-# ggplot(t |> filter(group == "whiting_all"),
-#        aes(X, Y, fill = biom_trend)) +
-#   geom_raster() +
-#   scale_fill_gradient2(na.value="grey94", trans = "log10", midpoint = 0)
-# 
-# ggplot(t |> filter(group == "whiting_all"), aes(biom_trend)) +
-#   geom_histogram()
+ggsave(paste0(home, "/figures/spatial_trends.pdf"), width = 18, height = 10, units = "cm")
 ```

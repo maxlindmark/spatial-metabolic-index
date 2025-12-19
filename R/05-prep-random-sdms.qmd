@@ -52,6 +52,7 @@ home <- here::here()
 
 ```{r}
 d <- read_csv(paste0(home, "/output/pred_grids_04_random_sdms.csv"))
+
 yi <- read_csv(paste0(home, "/output/year_intercept_04_sdms.csv"))
 
 # The spatial trends (zetas) are in log space, and we need the main effect of year_ct to make them into actual slopes
@@ -80,10 +81,10 @@ ggplot(d, aes(X, Y, fill = zeta_s_year_ct)) +
   coord_sf()
 
 # Read the prediction grid for calculating environmental trends
-pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(3_3).csv"))) |> 
-  filter(quarter == 4)
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv"))) |> 
+  filter(quarter == 4) |> 
+  filter(year >= 1991) # zeta is the same across all years
 ```
 
 ## Calculate cumulative biomass density to get core distribution area by species
@@ -180,216 +181,9 @@ bio_means <- read_csv(paste0(home, "/output/pred_grids_04_random_sdms.csv")) |>
   # log-scale biomass
   summarise(mean_biom = mean(est1 + est2),
             .by = c(id_env, group)) # biomass is given by exp(est1 + est2)
-
-#### Now do trends from 1993 and onwards
-temp_yr_slopes_short <- pred_grid |>
-  filter(year >= 1993) |> 
-  mutate(id_env = paste(X, Y, sep = "_"),
-         decade = year) %>%
-  split(.$id_env) |>
-  purrr::map(~lm(temp ~ decade, data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'id_env') |>
-  filter(term == 'decade') |> 
-  dplyr::select(id_env, estimate) |> 
-  rename(temp_slope = estimate)
-
-oxy_yr_slopes_short <- pred_grid |>
-  filter(year >= 1993) |> 
-  mutate(id_env = paste(X, Y, sep = "_"),
-         decade = year/10) %>%
-  split(.$id_env) |>
-  purrr::map(~lm(oxy ~ decade, data = .x)) |>
-  purrr::map_df(broom::tidy, .id = 'id_env') |>
-  filter(term == 'decade') |> 
-  dplyr::select(id_env, estimate) |> 
-  rename(oxy_slope = estimate)
-
-# Calculate temperature and oxygen means per grid cell
-temp_means_short <- pred_grid |> 
-  filter(year >= 1993) |> 
-  mutate(id_env = paste(X, Y, sep = "_")) |> 
-  summarise(mean_temp = mean(temp), .by = id_env)
-
-oxy_means_short <- pred_grid |> 
-  filter(year >= 1993) |> 
-  mutate(id_env = paste(X, Y, sep = "_")) |> 
-  summarise(mean_oxy = mean(oxy), .by = id_env)
 ```
 
 Calculate temperature and oxygen velocities
-
-```{r}
-# library(fmesher)
-# library(Matrix)
-# library(sf)
-# library(ggplot2)
-# library(viridis)
-# library(ggsidekick)
-# library(tidyr)
-# library(dplyr)
-# library(patchwork)
-# 
-# set.seed(194301)
-# 
-# #
-# loc <- matrix(runif(1000), ncol = 2)
-# mesh <- fm_mesh_2d(loc)
-# spde <- fm_fem(mesh)
-# invM0 <- spde$c0
-# diag(invM0) <- 1 / diag(spde$c0)
-# 
-# #
-# sf_mesh <- st_union(fm_as_sfc(mesh))
-# sf_grid <- st_make_grid(sf_mesh, n = 100)
-# sf_grid <- st_intersection(sf_grid, sf_mesh)
-# A_gs <- fm_evaluator(mesh, loc = st_coordinates(st_centroid(sf_grid)))$proj$A
-# 
-# # Loop through a couple of kappa values to visualize diffusion
-# 
-# stuff_list <- list()
-# sum_list <- list()
-# 
-# # Using IID normal deviates. Hold this constant across kappas
-# vec2 <- rnorm(mesh$n)
-# 
-# for (i in c("0", "2.5", "5")) {
-#   ln_kappa <- as.numeric(i)
-#   ln_tau <- log(1 / (1 + exp(2 * ln_kappa)))
-# 
-#   invD <- exp(ln_tau) * invM0 %*% (spde$c0 + exp(2 * ln_kappa) * spde$c0 + spde$g1)
-#   D <- solve(invD)
-# 
-#   which_mid <- which.min(rowSums(scale(mesh$loc[, 1:2])^2))
-# 
-#   # Diffusion from a specific point
-#   vec1 <- rep(0, mesh$n)
-#   vec1[which_mid] <- 1
-# 
-#   # Using IID normal deviates
-#   # vec2 = rnorm(mesh$n)
-# 
-#   stuff <- st_sf(sf_grid,
-#     "orig" = as.numeric(A_gs %*% vec1),
-#     "orig2" = as.numeric(A_gs %*% vec2),
-#     "proj" = as.numeric(A_gs %*% solve(invD, vec1)),
-#     "proj2" = as.numeric(A_gs %*% solve(invD, vec2))
-#   ) # , log(as.numeric(vec2b)))
-# 
-#   plot(stuff, cex = 2, pch = 19, border = NA)
-# 
-#   stuff_list[[i]] <- stuff |> mutate(kappa = i)
-# 
-#   sum_list[[i]] <- tibble(
-#     kappa = i,
-#     sum_orig = sum(stuff$orig),
-#     sum_proj = sum(stuff$proj),
-#     sum_orig2 = sum(stuff$orig2),
-#     sum_proj2 = sum(stuff$proj2)
-#   )
-# }
-# 
-# stuff <- bind_rows(stuff_list)
-# sums <- bind_rows(sum_list)
-# 
-# scale_values <- function(x) {
-#   (x - min(x)) / (max(x) - min(x))
-# }
-# 
-# stuff2 <- stuff |>
-#   mutate(kappa = paste0("log(\u03BA)=", kappa)) |>
-#   bind_rows(stuff |>
-#     filter(kappa == min(kappa)) |>
-#     dplyr::select(-proj, -proj2) |>
-#     rename(
-#       proj = orig,
-#       proj2 = orig2
-#     ) |>
-#     mutate(kappa = "Original")) |>
-#   dplyr::select(-orig, -orig2) |>
-#   pivot_longer(cols = c("proj", "proj2")) |>
-#   mutate(type = ifelse(name %in% c("orig2", "proj2"), "gmrf", "point")) |>
-#   mutate(
-#     value_sc = scale_values(value),
-#     .by = c(name, kappa)
-#   )
-# # n <- 50
-# # 
-# # sst <- tibble(expand_grid(
-# #   X = 1:n,
-# #   Y = 1:n)) |>
-# #   mutate(temp = rnorm(mean = 0, sd = 1, n = n*n))
-# 
-# sst <- stuff2 |> 
-#   filter(kappa == "log(κ)=2.5" & type == "gmrf") |> 
-#   mutate(
-#     centroid = st_centroid(sf_grid),
-#     Y = st_coordinates(centroid)[,1],
-#     X = st_coordinates(centroid)[,2]
-#   ) |> 
-#   dplyr::select(X, Y, value_sc) |> 
-#   st_drop_geometry() |> 
-#   rename(temp = value_sc) |> 
-#   mutate(temp = temp - 0.55) |> 
-#   filter(X > 0.2 & X < 0.8 & Y > 0.2 & Y < 0.8) |> 
-#   mutate(X = as.integer(X*50),
-#                 Y = as.integer(Y*50)) |> 
-#   summarise(temp = mean(temp), .by = c(X, Y))
-# 
-# ggplot(sst, aes(X, Y, fill = temp)) +
-#   geom_raster() + 
-#   scale_fill_gradient2() +
-#   theme(aspect.ratio = 1) +
-#   coord_cartesian(expand = 0)
-# 
-# sst2 <- sst |>
-#   raster::rasterFromXYZ() |>
-#   brick()
-# 
-# slopedat <- calcslope(sst2)
-# slopedat$slope <- sst$temp
-# # Must use y_dist = res(rx) if data is in UTMs or other true distance grid
-# mnsst <- raster::stackApply(sst2, indices = allyears, fun = mean)
-# spatx <- spatialgrad(mnsst, y_dist = raster::res(sst2), y_diff = NA)
-# velo_sst <- calcvelocity(spatx, slopedat, y_dist = 1)
-# 
-# library(patchwork)
-# 
-# p1 <- ggplot(velo_sst, aes(x, y, fill = temporal_trend)) +
-#   geom_raster() +
-#   scale_fill_gradient2() +
-#   theme(aspect.ratio = 1) +
-#   coord_cartesian(expand = 0)
-# 
-# velo_sst$velocity
-# 
-# transform_sign_sqrt <- function(x) {
-#   sign(x) * sqrt(abs(x))
-# }
-# 
-# velo_sst$velocity
-# transform_sign_sqrt(velo_sst$velocity)
-# 
-# transform_arcsinh <- function(x) {
-#   asinh(x)
-# }
-# 
-# hist(velo_sst$velocity)
-# 
-# velo_sst$velocity <- ifelse(velo_sst$velocity > quantile(velo_sst$velocity, 0.95),
-#                             quantile(velo_sst$velocity, 0.95),
-#                             velo_sst$velocity)
-# 
-# p2 <- ggplot(velo_sst, aes(x, y, fill = velocity)) +
-#   geom_raster() +
-#   scale_fill_gradient2() +
-#   theme(aspect.ratio = 1) +
-#   coord_cartesian(expand = 0)
-# 
-# (p1 + p2) & theme(legend.position = "bottom")
-# 
-# # Not sure what to make of this... 
-```
-
 
 ```{r}
 sst <- pred_grid |>
@@ -421,7 +215,6 @@ velo_sst <- velo_sst |>
   dplyr::select(velocity, id_env) |>
   rename(temp_vel = velocity)
 
-
 # Same for oxygen
 oxy <- pred_grid |>
   group_split(year) |>
@@ -449,59 +242,12 @@ velo_oxy <- velo_oxy |>
   mutate(id_env = paste(x, y, sep = "_")) |>
   dplyr::select(velocity, id_env) |>
   rename(oxy_vel = velocity)
-
-
-
-
-# Same for the shorter time series
-# Temperature
-sst_short <- pred_grid |>
-  filter(year >= 1993) |> 
-  group_split(year) |>
-  map(~raster::rasterFromXYZ(.x[, c("X", "Y", "temp")])) |>
-  brick()
-
-slopedat <- calcslope(sst_short)
-allyears <- rep(1, raster::nlayers(sst_short))
-mnsst <- raster::stackApply(sst_short, indices = allyears, fun = mean)
-spatx <- spatialgrad(mnsst, y_dist = raster::res(sst_short), y_diff = NA)
-velo_sst_short <- calcvelocity(spatx, slopedat, y_dist = 1)
-
-velo_sst_short <- velo_sst_short |>
-  drop_na(velocity) |>
-  filter(velocity < quantile(velocity, probs = 0.99),
-         velocity > quantile(velocity, probs = 0.01)) |> 
-  mutate(id_env = paste(x, y, sep = "_")) |>
-  dplyr::select(velocity, id_env) |>
-  rename(temp_vel = velocity)
-
-# Oxygen
-oxy_short <- pred_grid |>
-  filter(year >= 1993) |> 
-  group_split(year) |>
-  map(~rasterFromXYZ(.x[,c("X", "Y", "oxy")])) |>
-  brick() 
-
-slopedat <- calcslope(oxy_short)
-allyears <- rep(1, raster::nlayers(oxy_short))
-mnsst <- raster::stackApply(oxy_short, indices = allyears, fun = mean)
-spatx <- spatialgrad(mnsst, y_dist = raster::res(oxy_short), y_diff = NA)
-velo_oxy_short <- calcvelocity(spatx, slopedat, y_dist = 1)
-
-velo_oxy_short <- velo_oxy_short |>
-  drop_na(velocity) |>
-  filter(velocity < quantile(velocity, probs = 0.99)) |>
-  filter(velocity > quantile(velocity, probs = 0.01)) |> 
-  mutate(id_env = paste(x, y, sep = "_")) |>
-  dplyr::select(velocity, id_env) |>
-  rename(oxy_vel = velocity)
 ```
 
 Join environmental trends and velocities to trends data
 
 ```{r}
 trends_long <- trends |> 
-  filter(group %in% c("cod_juvenile", "cod_adult", "flounder_adult", "flounder_juvenile")) |> 
   mutate(id_env = paste(X, Y, sep = "_")) |>
   left_join(velo_oxy, by = "id_env") |> 
   left_join(velo_sst, by = "id_env") |> 
@@ -516,26 +262,8 @@ trends_long <- trends |>
                 oxy_slope, mean_oxy, oxy_vel, 
                 mean_biom, lon, lat, group, biom_trend,
                 cumulative)
-
-trends_short <- trends |> 
-  filter(!group %in% c("cod_juvenile", "cod_adult", "flounder_adult", "flounder_juvenile")) |> 
-  mutate(id_env = paste(X, Y, sep = "_")) |>
-  left_join(velo_oxy_short, by = "id_env") |> 
-  left_join(velo_sst_short, by = "id_env") |> 
-  left_join(temp_yr_slopes_short, by = "id_env") |>
-  left_join(oxy_yr_slopes_short, by = "id_env") |> 
-  left_join(temp_means_short, by = "id_env") |> 
-  left_join(oxy_means_short, by = "id_env") |> 
-  left_join(bio_means, by = c("id_env", "group")) |> 
-  rename(biom_trend = zeta_s_year_ct) |> 
-  dplyr::select(X, Y, 
-                temp_slope, mean_temp, temp_vel, 
-                oxy_slope, mean_oxy, oxy_vel, 
-                mean_biom, lon, lat, group, biom_trend,
-                cumulative)
 ```
 
 ```{r}
 write_csv(trends_long, paste0(home, "/output/rf_dat_long.csv"))
-write_csv(trends_short, paste0(home, "/output/rf_dat_short.csv"))
 ```

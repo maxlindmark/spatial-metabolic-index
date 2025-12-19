@@ -1,5 +1,5 @@
 ---
-title: "Fit tweedie models to biomass density and extract conditional predictions"
+title: "Fit models to biomass density and extract conditional predictions"
 author: "Max Lindmark"
 date: today
 date-format: iso
@@ -46,17 +46,17 @@ home <- here::here()
 
 ```{r read data}
 # Read data
-d <- readr::read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
+d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
   add_utm_columns(ll_names = c("lon", "lat")) |> 
-  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "adult"))
+  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "adult")) |> 
+  filter(!group %in% c("whiting_all", "turbot_all"))
 ```
 
 ## Scale variables
 
 ```{r}
-pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(3_3).csv")))
+pred_grid <- bind_rows(read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
 pred_grid <- pred_grid |>
   mutate(temp_sc = (temp - mean(temp)) / sd(temp),
@@ -89,6 +89,8 @@ pred_list <- list()
 pred_grid_list <- list()
 res_list <- list()
 cog_list <- list()
+#eao_list <- list()
+index_list <- list()
 
 for(i in unique(d$group)) { 
     
@@ -111,32 +113,35 @@ for(i in unique(d$group)) {
       labs(x = "Easting (km)", y = "Northing (km)")
     
     ggsave(paste0(home, paste0("/figures/supp/mesh_", i, ".pdf")), width = 14, height = 14, units = "cm")
-
-    if(i %in% c("cod_juvenile", "plaice_adult")){
-
-      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
-                  data = dd,
-                  mesh = mesh,
-                  family = tweedie(link = "log"),
-                  spatiotemporal = "iid",
-                  spatial = "on",
-                  time = "year")
-
-    } else if(i %in% c("dab_all", "flounder_adult", "turbot_all", "whiting_all")){
-      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
-                  data = dd,
-                  mesh = mesh,
-                  family = tweedie(link = "log"),
-                  spatiotemporal = "iid",
-                  spatial = "on",
-                  time = "year")
-
-    } else{
+# 
+#     if(i %in% c("plaice_adult")){
+# 
+#       m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
+#                   data = dd,
+#                   mesh = mesh,
+#                   #family = tweedie(link = "log"),
+#                   family = delta_gamma(type = "poisson-link"),
+#                   spatiotemporal = "iid",
+#                   spatial = "on",
+#                   time = "year")
+# 
+#     } else if(i %in% c("cod_juvenile", "dab_all", "flounder_adult", "plaice_juvenile")){
+#       m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
+#                   data = dd,
+#                   mesh = mesh,
+#                   #family = tweedie(link = "log"),
+#                   family = delta_gamma(type = "poisson-link"),
+#                   spatiotemporal = "iid",
+#                   spatial = "on",
+#                   time = "year")
+# 
+#     } else if(i %in% c("flounder_juvenile", "cod_adult")){
 
       m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
                   data = dd,
                   mesh = mesh,
-                  family = tweedie(link = "log"),
+                  #family = tweedie(link = "log"),
+                  family = delta_gamma(type = "poisson-link"),
                   spatiotemporal = "iid",
                   spatial = "on",
                   time = "year",
@@ -144,7 +149,7 @@ for(i in unique(d$group)) {
                     threshold_breakpt_slope = normal(0, 1),
                     threshold_breakpt_cut = normal(0, 1)))
 
-      }
+    #  }
     
     # Check again to be safe...
     sanity(m)
@@ -178,8 +183,10 @@ for(i in unique(d$group)) {
              group = i)
 
     # Predict
-    pred <- predict(m, newdata = nd, re_form = NA, re_form_iid = NA, se_fit = TRUE)
-    
+    pred <- predict(m, newdata = nd, re_form = NA, re_form_iid = NA, se_fit = TRUE) |> 
+      mutate(est = as.numeric(est),
+             est_se = as.numeric(est_se))
+             
     pred_list[[i]] <- pred
 
     # Predict on grid 
@@ -190,17 +197,24 @@ for(i in unique(d$group)) {
     pred_grid_list[[i]] <- p 
     
     # Predict on grid and get cog
-    pcog <- predict(m, newdata = pred_grid |> 
-                   filter(year %in% unique(dd$year)),
-                          return_tmb_object = TRUE)
+    grid_p <- predict(m, newdata = pred_grid |> 
+                        filter(year %in% unique(dd$year) & quarter == 4),
+                      return_tmb_object = TRUE)
     
-    cog <- get_cog(pcog, format = "wide") |> mutate(group = i)
+    cog <- get_cog(grid_p, format = "wide") |> mutate(group = i)
             
     cog <- cog |>
       mutate_at(c("est_x", "lwr_x", "upr_x", "est_y", "lwr_y", "upr_y"),
                 ~ . * 1000)
     
     cog_list[[i]] <- cog
+    
+    # EAO, the area occupied I can do in plot sdms-conditional
+    #eao_list[[i]] <- get_eao(grid_p) |> mutate(group = i)
+    
+    # EAO, the area occupied I can do in plot sdms-conditional
+    index_list[[i]] <- get_index(grid_p) |> mutate(group = i)
+
     
 }
 
@@ -209,6 +223,8 @@ preds <- dplyr::bind_rows(pred_list)
 preds_grid <- dplyr::bind_rows(pred_grid_list)
 res <- dplyr::bind_rows(res_list)
 cogs <- dplyr::bind_rows(cog_list)
+#eaos <- dplyr::bind_rows(eao_list)
+index <- dplyr::bind_rows(index_list)
 ```
 
 ```{r}
@@ -216,6 +232,8 @@ write_csv(res, paste0(home, "/output/residuals_02_sdms.csv"))
 write_csv(preds, paste0(home, "/output/conditional_02_sdms.csv"))
 write_csv(preds_grid, paste0(home, "/output/pred_grids_02_sdms.csv"))
 write_csv(cogs, paste0(home, "/output/cogs_02_sdms.csv"))
+#write_csv(eaos, paste0(home, "/output/eaos_02_sdms.csv"))
+write_csv(index, paste0(home, "/output/index_02_sdms.csv"))
 ```
 
 ## Plot residuals

@@ -52,15 +52,16 @@ home <- here::here()
 d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
   add_utm_columns(ll_names = c("lon", "lat")) |> 
   mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "all"),
-         life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage))
+         life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage)) |> 
+  filter(!group %in% c("whiting_all", "turbot_all")) |> 
+  filter(year >= 1991)
 ```
 
 ## Scale variables
 
 ```{r}
-pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_3).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(3_3).csv")))
+pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
 d <- d |> 
   mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
@@ -84,7 +85,8 @@ pred_grid <- pred_grid |>
          depth_sq = depth_sc*depth_sc,
          month_f = as.factor(month),
          year_ct = (year - mean(d$year)) / 10) |> 
-  filter(quarter == 4)
+  filter(quarter == 4) |> 
+  filter(year >= 1991)
 ```
 
 ## Fit models
@@ -107,30 +109,14 @@ for(i in unique(d$group)) {
   plot(mesh)
   
   # This is a variant of the main model without environmental fixed effects
-  
-  if(i %in% c("turbot_all", "whiting_all")){
-    
-    m <- sdmTMB(density ~ year_ct + depth_sc + depth_sq,
-                data = dd,
-                mesh = mesh,
-                family = delta_gamma(type = "poisson-link"),
-                spatiotemporal = "iid",
-                spatial = "off",
-                spatial_varying = ~0 + year_ct,
-                time = "year")
-    
-  } else {
-  
-    m <- sdmTMB(density ~ year_ct + depth_sc + depth_sq,
-                data = dd,
-                mesh = mesh,
-                family = delta_gamma(type = "poisson-link"),
-                spatiotemporal = "iid",
-                spatial = "on",
-                spatial_varying = ~0 + year_ct,
-                time = "year")  
-    
-  }
+  m <- sdmTMB(density ~ year_ct + depth_sc + depth_sq,
+              data = dd,
+              mesh = mesh,
+              family = delta_gamma(type = "poisson-link"),
+              spatiotemporal = "iid",
+              spatial = "on",
+              spatial_varying = ~0 + year_ct,
+              time = "year")  
   
   # Check the model converges
   sanity(m)
