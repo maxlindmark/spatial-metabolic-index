@@ -1,6 +1,20 @@
-# Local biomass trends of demersal fish in the Baltic Sea explained by metabolic index velocities
-This repo contains data and R code for collating cpue data by length for cod, flounder, plaice and dab, fitting metabolic index parameters, fitting species distribution models using [sdmTMB](https://github.com/pbs-assess/sdmTMB), and calculating metabolic index velocities.
+# Density-dependence drive range shifts in a rapidly deteriorating range-edge ecosystem
+This repo contains data and R code for fitting species distribution models to biomass density data from the BITS trawl survey, to estimate changes in the niche and ranges of cod, flounder and place, in relation to environmental change and population abundance.
 
-With Alessandro Orio, Federico Mailoi, Alexa Fredston, Viktor Thunell, Julia Indivero & Sean C. Anderson
+### Reproducing Results
 
-Methods and approach heavily inspired by [English et al., (2022)](https://onlinelibrary.wiley.com/doi/abs/10.1111/faf.12613) & [Essington et al., (2022)](https://onlinelibrary.wiley.com/doi/full/10.1111/ecog.06249)
+To reproduce our results you can either:
+
+1. Fork the repository, clone it, open a new RStudio project with version control, and paste the repo url
+
+2. Download a zip and work locally on your computer
+
+We use [`renv`](https://rstudio.github.io/renv/articles/renv.html) to manage package versions. Once you've downloaded the project, run `renv::restore()` in your current working directory. This will install the package versions we used when this repository was archived. Note that packages are installed in a stand-alone project library for this paper, and will not affect your installed R packages anywhere else! `renv` does *not* help with different versions of R. We used R version 4.3.2, and ran the analysis on a 24 GB Apple M2 laptop.
+
+### Repository structure
+
+`R`: code to prepare data, fit models and produce figures
+
+`data`: fish length at temperature data
+
+`figures`: figures including figures for supporting information 
