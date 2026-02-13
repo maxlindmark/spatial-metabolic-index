@@ -29,8 +29,8 @@ theme_facet_map <- function(base_size = 11, base_family = "") {
   theme_sleek(base_size = base_size, base_family = "") +
     theme(
       legend.direction = "horizontal",
-      legend.margin = margin(1, 1, 1, 1),
-      legend.box.margin = margin(0, 0, 0, 0),
+      legend.margin = ggplot2::margin(1, 1, 1, 1),
+      legend.box.margin = ggplot2::margin(0, 0, 0, 0),
       legend.key.height = unit(0.4, "line"),
       legend.key.width = unit(2, "line"),
       legend.spacing.x = unit(0.1, 'cm'),
