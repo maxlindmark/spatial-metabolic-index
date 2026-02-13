@@ -17,7 +17,7 @@ editor: source
 
 ## Intro
 
-Fit models to biomass density of cod, flounder, plaice and dab (juveniles and adults) between 1993-2023 in the Baltic Sea using sdmMTB fit different oxygen and temperature-related covariates, compare AIC. Select the "best" covariate for further trend and velocity analysis.
+Fit models to biomass density of cod, flounder and plaice between 1993-2023 in the Baltic Sea using sdmMTB fit different oxygen and temperature-related covariates, compare AIC. Select the "best" covariate for further trend and velocity analysis.
 
 ## Load packages & source functions
 
@@ -48,6 +48,9 @@ home <- here::here()
 ## Read data
 
 ```{r read data}
+#| message: false
+#| warning: false
+
 # Read data
 d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
   add_utm_columns(ll_names = c("lon", "lat")) |> 
@@ -76,6 +79,9 @@ d <- tidylog::left_join(d, sizes, by = "group")
 ## Calculate the metabolic index
 
 ```{r calculate metabolic index}
+#| message: false
+#| warning: false
+
 # Oxygen is ml/L, We want micro mol/L. 1 ml/l = 10^3/22.391 = 44.661 micro mol/l
 d$oxy_si <- (d$oxy * (10^3)) / 22.391
 
@@ -93,6 +99,9 @@ d <- d |>
 ## Scale variables
 
 ```{r}
+#| message: false
+#| warning: false
+
 pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
                        readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
@@ -109,12 +118,15 @@ d <- d |>
   mutate(phi_sc = as.vector(scale(phi)), .by = group) # don't scale this across a common value because it varies by species
 
 # Based on poor model fit due to infrequent observations, I drop these
-d <- d |> filter(!group %in% c("whiting_all", "turbot_all"))
+d <- d |> filter(!group %in% c("whiting_all", "turbot_all", "dab_all"))
 ```
 
 ```{r}
+#| message: false
+#| warning: false
+
 order <- c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-           "Plaice Adult", "Plaice Juvenile", "Dab All")
+           "Plaice Adult", "Plaice Juvenile")
 
 d |> 
   mutate(life_stage = str_to_sentence(life_stage),
@@ -139,6 +151,9 @@ ggsave(paste0(home, "/figures/supp/mi_density.pdf"), width = 13, height = 16, un
 ## Fit models and save marginal AIC
 
 ```{r fit models}
+#| message: false
+#| warning: false
+
 data_list_aic <- list()
 
 for(i in unique(d$group)) {  
@@ -171,7 +186,6 @@ for(i in unique(d$group)) {
     m0 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + oxy_sc,
                  data = dd,
                  mesh = mesh,
-                 #family = tweedie(link = "log"),
                  family = delta_gamma(type = "poisson-link"),
                  spatiotemporal = "iid",
                  spatial = "on",
@@ -183,7 +197,6 @@ for(i in unique(d$group)) {
     m1 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
                  data = dd,
                  mesh = mesh,
-                 #family = tweedie(link = "log"),
                  family = delta_gamma(type = "poisson-link"),
                  spatiotemporal = "iid",
                  spatial = "on",
@@ -195,7 +208,6 @@ for(i in unique(d$group)) {
     m2 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
                   data = dd,
                   mesh = mesh,
-                  #family = tweedie(link = "log"),
                   family = delta_gamma(type = "poisson-link"),
                   spatiotemporal = "iid",
                   spatial = "on",
@@ -207,7 +219,6 @@ for(i in unique(d$group)) {
     m3 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
                  data = dd,
                  mesh = mesh,
-                 #family = tweedie(link = "log"),
                  family = delta_gamma(type = "poisson-link"),
                  spatiotemporal = "iid",
                  spatial = "on",
@@ -222,7 +233,6 @@ for(i in unique(d$group)) {
     m4 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + phi_sc,
                  data = dd,
                  mesh = mesh,
-                 #family = tweedie(link = "log"),
                  family = delta_gamma(type = "poisson-link"),
                  spatiotemporal = "iid",
                  spatial = "on",
@@ -234,8 +244,7 @@ for(i in unique(d$group)) {
     m5 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + breakpt(phi_sc),
                  data = dd,
                  mesh = mesh,
-                 family = tweedie(link = "log"),
-                 #family = delta_gamma(type = "poisson-link"),
+                 family = delta_gamma(type = "poisson-link"),
                  spatiotemporal = "iid",
                  spatial = "on",
                  time = "year",
@@ -262,5 +271,4 @@ data_aic <- bind_rows(data_list_aic)
 
 write_csv(data_aic, paste0(home, "/output/data_aic_01.csv"))
 ```
-
 

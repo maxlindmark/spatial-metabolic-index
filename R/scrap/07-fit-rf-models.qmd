@@ -57,8 +57,42 @@ set.seed(42)
 
 d <- read_csv(paste0(home, "/output/rf_dat_long.csv")) |> 
   filter(cumulative == "Y") |> 
-  drop_na(temp_vel, oxy_vel) |> 
-  dplyr::select(biom_trend, temp_vel, mean_temp, oxy_vel, mean_oxy, group, mean_biom)
+  filter(!group == "dab_all") |> 
+  dplyr::select(biom_trend, temp_slope, mean_temp, oxy_slope, mean_oxy, mean_sal, sal_slope, group, mean_biom) |> 
+  mutate(mean_biom = (mean_biom - mean(mean_biom)) / sd(mean_biom),
+         biom_trend = (biom_trend - mean(biom_trend)) / sd(biom_trend),
+         .by = group)
+```
+
+```{r}
+# Select numeric predictors only
+cor_dat <- trend |> 
+  select(-biom_trend, -group)
+
+# Correlation matrix
+cor_mat <- cor(cor_dat, use = "pairwise.complete.obs")
+
+# Convert to long format
+cor_long <- cor_mat |>
+  as.data.frame() |>
+  rownames_to_column("Var1") |>
+  pivot_longer(-Var1, names_to = "Var2", values_to = "Correlation")
+
+# Plot with values
+ggplot(cor_long, aes(Var1, Var2, fill = Correlation)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Correlation)),
+            size = 3) +
+  scale_fill_gradient2(low = "steelblue",
+                       mid = "white",
+                       high = "tomato3",
+                       midpoint = 0,
+                       limits = c(-1, 1)) +
+  coord_equal() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(fill = "r")
+
 ```
 
 ```{r}
@@ -77,8 +111,16 @@ d <- read_csv(paste0(home, "/output/rf_dat_long.csv")) |>
 First we split the data into training and testing (for evaluating the final model's performance after tuning hyper-parameters using cross validation)
 
 ```{r}
-trend <- d
+d |> 
+  pivot_longer(c(temp_slope, mean_temp, oxy_slope, mean_oxy, sal_slope, mean_sal, mean_biom)) |> 
+  ggplot(aes(value)) + 
+  facet_wrap(~name, scales = "free") +
+  geom_histogram()
 
+trend <- d
+```
+
+```{r}
 trend_split <- initial_split(trend, prop = 3/4)
 trend_split
 
@@ -93,7 +135,7 @@ trend_cv <- vfold_cv(trend_train)
 
 # Now define the "recipe", basically the formula because we have already pre-processed the data
 # Define the recipe, note the variables are already scaled
-trend_recipe <- recipe(biom_trend ~ temp_vel + mean_temp + oxy_vel + mean_oxy + group + mean_biom,
+trend_recipe <- recipe(biom_trend ~ temp_slope + mean_temp + oxy_slope + mean_oxy + sal_slope + mean_sal + mean_biom,
                        data = trend)
 
 trend_recipe
@@ -126,9 +168,14 @@ Tune hyper parameters by checking model performance using cross validation
 
 ```{r}
 # Default mtry is the (rounded down) square root of the number variables and tree is 500. Specify which values want to try in a grid
+# rf_trend_grid <- expand.grid(
+#   mtry = seq(2, 5, by = 1),
+#   trees = seq(200, 1000, by = 200)
+#   )
+ 
 rf_trend_grid <- expand.grid(
-  mtry = seq(2, 5, by = 1),
-  trees = seq(200, 1000, by = 200)
+  mtry = 5,
+  trees = 600
   )
 
 # Extract results of tuning (metric is rmse)
@@ -195,7 +242,7 @@ Fit plots
 collect_predictions(rf_trend_fit) |>
   ggplot(aes(biom_trend, .pred)) +
   geom_point(alpha = 0.5, color = "steelblue") +
-  labs(x = "Biomass trend") +
+  labs(x = "Observed", y = "Predicted") +
   geom_abline(linetype = 2, color = "tomato3") +
   NULL
 
@@ -227,9 +274,11 @@ create_vip_tibble <- function(trend_ranger_obj) {
          var = as.factor(names(trend_ranger_obj$variable.importance))) |> 
     mutate(var2 = recode(var, 
                          "mean_biom" = "Mean biomass density",
-                         "oxy_vel" = "Oxygen velocity",
-                         "temp_vel" = "Temperature velocity",
+                         "oxy_slope" = "Oxygen velocity",
+                         "sal_slope" = "Salinity slope",
+                         "temp_slope" = "Temperature slope",
                          "mean_temp" = "Mean temperature",
+                         "mean_sal" = "Mean salinity",
                          "mean_oxy" = "Mean oxygen",
                          "group" = "Group"),
            response = "Trend")
@@ -237,14 +286,15 @@ create_vip_tibble <- function(trend_ranger_obj) {
 
 vip_tib_trend <- create_vip_tibble(trend_ranger_obj)
 
-ggplot(vip_tib_trend,
+p1 <- ggplot(vip_tib_trend,
                aes(Importance, reorder(var2, Importance))) + 
-  geom_point() + 
-  geom_segment(aes(x = 0, xend = Importance,
-                   yend = as.numeric(reorder(var2, Importance)))) +
-  theme(axis.title.y = element_blank())
-
-ggsave(paste0(home, "/figures/vip.pdf"), width = 9, height = 7, units = "cm")
+  #geom_point() + 
+  #geom_segment(aes(x = 0, xend = Importance,
+  #                 yend = as.numeric(reorder(var2, Importance)))) +
+  geom_bar(stat = "identity", fill = "grey40") +
+  coord_cartesian(expand = 0) +
+  theme(axis.title.y = element_blank()) +
+  annotate("text", label = "(a)", x = -Inf, y = Inf, vjust = 1.5, hjust = -0.5, color = "white", size = 3)
 
 # Partial dependence plot
 # https://stackoverflow.com/questions/67634344/r-partial-dependence-plots-from-workflow
@@ -255,63 +305,107 @@ explainer_rf <- explain_tidymodels(
     label = "random forest"
 )
 
+acc_rf <- model_profile(
+  explainer_rf,
+  variables = "mean_temp",
+  type = "accumulated"
+)
+
+plot(acc_rf)
+
+acc_rf <- model_profile(
+  explainer_rf,
+  variables = "mean_biom",
+  type = "accumulated"
+)
+
+plot(acc_rf)
+
 pdp_rf <- model_profile(explainer_rf, N = NULL, 
-                        variables = c("mean_temp", "mean_oxy", "temp_vel",
-                                      "oxy_vel", "mean_biom"),
-                        groups = "group")
+                        variables = c(
+                          "mean_temp",
+                          # "mean_oxy",
+                          # "mean_sal",
+                          # "temp_slope",
+                          # "oxy_slope",
+                          # "sal_slope",
+                          "mean_biom"
+                          ),
+                        groups = NULL)
+
+plot(pdp_rf)
 
 pd <- as_tibble(pdp_rf$agr_profiles) |> 
   janitor::clean_names() |> 
   mutate(var2 = recode(vname,
                        "mean_biom" = "Mean biomass density",
-                       "oxy_vel" = "Oxygen velocity",
-                       "temp_vel" = "Temperature velocity",
+                       "oxy_slope" = "Oxygen slope",
+                       "temp_slope" = "Temperature slope",
+                       "sal_slope" = "Salinity slope",
                        "mean_temp" = "Mean temperature (°C)",
                        "mean_oxy" = "Mean oxygen (ml/L)",
-                       "Group" = "Group"))
-
-# Trim the range of x-values
-pd <- pd |>
+                       "mean_sal" = "Mean salinity (psu)",
+                       "Group" = "Group")) |> 
   mutate(group2 = str_replace(groups, "_", " "),
          group2 = str_to_title(group2),
          group2 = factor(group2, 
                          levels = c("Cod Adult", "Cod Juvenile", "Flounder Adult",
                                     "Flounder Juvenile",
                                     "Plaice Adult", "Plaice Juvenile", "Dab All"))) |> 
-  mutate(lwr = quantile(x, probs = 0.05),
-         upr = quantile(x, probs = 0.95),
-         .by = c(group2, vname)) |> 
-  filter(x > lwr & x < upr) |> 
-  mutate(yhat_ct = yhat / mean(yhat), .by = group2)
+  mutate(yhat_ct = (yhat - mean(yhat)) / sd(yhat), .by = group2)
 
-p1 <- pd |> 
-  filter(var2 %in% c("Mean temperature (°C)", "Mean oxygen (ml/L)")) |> 
+facet_labels <- tibble(
+  var2 = c("Mean temperature (°C)", "Mean biomass density"),
+  label = c("(c)", "(b)"),
+  x = -Inf,
+  y = Inf
+)
+
+p2 <- pd |> 
+  filter(var2 %in% c("Mean temperature (°C)", "Mean biomass density")) |> 
+  #filter((between(x, c(-2, 2)) & var2 == "Mean biomass density")) |> 
   ggplot(aes(x, yhat_ct, color = group2)) +
-  facet_wrap(~var2, scales =  "free") +
+  facet_wrap(~var2, scales = "free") +
   geom_line(alpha = 0.8, linewidth = 0.9) +
   scale_color_brewer(palette = "Paired") +
-  labs(x = "Value",
-       y = "Scaled local biomass trend") +
-  geom_smooth(aes(x, yhat_ct), inherit.aes = FALSE,
-              color = "black", alpha = 0.4, linewidth = 0.75) +
+  geom_text(data = facet_labels,
+            aes(x = x, y = y, label = label),
+            inherit.aes = FALSE,
+            hjust = -0.5, 
+            vjust = 1.5,
+            color = "gray40",
+            size = 3) +
+  labs(x = "Predictor value",
+       y = "z-scored predicted biomass trend") +
+  geom_smooth(aes(x, yhat_ct), inherit.aes = FALSE, color = "gray40", 
+              alpha = 0.4, linewidth = 0.75,
+              method = "gam", formula = y~s(x, k=3)) +
   guides(color = guide_legend(hjust = -10)) +
   theme(legend.position = "bottom",
         legend.title = element_blank())
 
-tag_facet(p1, fontface = 1, col = "gray30", size = 3)
+(free(p1) / p2) + plot_layout(heights = c(1, 1.3))
 
-ggsave(paste0(home, "/figures/effects.pdf"), width = 18, height = 11, units = "cm")
+ggsave(paste0(home, "/figures/vip_effects.pdf"), width = 18, height = 16, units = "cm")
 ```
+
+```{r}
+
+rf_trend_fit |> collect_metrics()
+```
+
 
 ```{r}
 part_dep_all <- pd |>
   ggplot(aes(x, yhat_ct, color = group2)) +
-  geom_line(alpha = 0.8) +
-  facet_wrap(~vname, ncol = 3, scales = "free") +
+  geom_line(alpha = 0.8, linewidth = 0.9) +
+  facet_wrap(~var2, ncol = 3, scales = "free") +
   scale_color_brewer(palette = "Paired") +
-  labs(x = "") +
-  geom_smooth(aes(x, yhat_ct), inherit.aes = FALSE,
-              color = "black", alpha = 0.4, size = 0.75) +
+  labs(x = "Predictor value",
+       y = "Predicted biomass trend") +
+  geom_smooth(aes(x, yhat_ct), inherit.aes = FALSE, color = "gray40", 
+              alpha = 0.4, linewidth = 0.75,
+              method = "gam", formula = y~s(x, k=3)) +
   guides(color = guide_legend(position = "inside")) +
   theme(legend.position.inside = c(0.85, 0.25),
         legend.title = element_blank())
@@ -322,6 +416,10 @@ ggsave(paste0(home, "/figures/supp/partial_dependence.pdf"), width = 18, height 
 ```
 
 ```{r}
+knitr::knit_exit()
+```
+
+```{r}
 ## Plot conditional effects and partial dependence plots
 
 # Conditional effect of temperature (using the range in the old data)
@@ -329,8 +427,8 @@ ggsave(paste0(home, "/figures/supp/partial_dependence.pdf"), width = 18, height 
 #   group_by(group) |> 
 #   data_grid(mean_temp = seq_range(mean_temp, n = 100, trim = 0.1)) |> 
 #   ungroup() |> 
-#   mutate(temp_vel = mean(d_old$temp_vel),
-#          oxy_vel = mean(d_old$oxy_vel),
+#   mutate(temp_slope = mean(d_old$temp_slope),
+#          oxy_slope = mean(d_old$oxy_slope),
 #          mean_biom = mean(d_old$mean_biom),
 #          mean_oxy = mean(d_old$mean_oxy),
 #          group2 = str_replace(group, "_", " "),
@@ -357,8 +455,8 @@ ggsave(paste0(home, "/figures/supp/partial_dependence.pdf"), width = 18, height 
 #   group_by(group) |> 
 #   data_grid(mean_temp = seq_range(mean_temp, n = 100, trim = 0.1)) |> 
 #   ungroup() |> 
-#   mutate(temp_vel = mean(d_new$temp_vel),
-#          oxy_vel = mean(d_new$oxy_vel),
+#   mutate(temp_slope = mean(d_new$temp_slope),
+#          oxy_slope = mean(d_new$oxy_slope),
 #          mean_biom = mean(d_new$mean_biom),
 #          mean_oxy = mean(d_new$mean_oxy),
 #          group2 = str_replace(group, "_", " "),

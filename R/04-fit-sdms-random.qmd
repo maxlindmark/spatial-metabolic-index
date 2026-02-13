@@ -53,8 +53,20 @@ d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
   add_utm_columns(ll_names = c("lon", "lat")) |> 
   mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "all"),
          life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage)) |> 
-  filter(!group %in% c("whiting_all", "turbot_all")) |> 
+  filter(!group %in% c("whiting_all", "turbot_all", "dab_all")) |> 
   filter(year >= 1991)
+
+# Summarise over life stages
+# dsum <- d |>
+#   summarise(density = sum(density, na.rm = TRUE), .by = c(haul_id, common_name))
+# 
+# d2 <- dsum |>
+#   left_join(d |>
+#               dplyr::select(-density, -group, -common_name) |>
+#               distinct(haul_id, .keep_all = TRUE), by = "haul_id")
+# 
+# d <- d2 |>
+#   rename(group = common_name)
 ```
 
 ## Scale variables
@@ -102,14 +114,14 @@ year_intercepts_list <- list()
 for(i in unique(d$group)) { 
     
   dd <- d |>
-    filter(group == i & quarter == 4)
+    filter(group == i)
   
   mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 12)
   
   plot(mesh)
   
   # This is a variant of the main model without environmental fixed effects
-  m <- sdmTMB(density ~ year_ct + depth_sc + depth_sq,
+  m <- sdmTMB(density ~ year_ct + depth_sc + depth_sq + (1|month_f),
               data = dd,
               mesh = mesh,
               family = delta_gamma(type = "poisson-link"),

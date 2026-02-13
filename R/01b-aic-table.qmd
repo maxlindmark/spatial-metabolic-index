@@ -37,6 +37,9 @@ home <- here::here()
 ## Plot AIC
 
 ```{r}
+#| message: false
+#| warning: false
+
 read_csv(paste0(home, "/output/data_aic_01.csv")) |>  
   group_by(group) |>
   filter(AIC == min(AIC))

@@ -13,15 +13,15 @@ goldilocks <- tibble(from = c("• Fit environmental SDMs \n• Identify parsimo
                               "• Fit environmental SDMs \n• Identify parsimonious \ncovariates",
                               "• Predict on grid \n• Calculate experienced \nenvironmental conditions \nas weighted quantiles",
                               "• Fit climate-agnostic SDMs \nwith GMRF spatial trends",
-                              "• Predict on grid \n• Extract spatial trends\nin biomass density",
-                              "• Fit spatial trends in biomass \ndensity to environmental \ntrends and velocities using\nRandom Forest"
+                              "• Predict on grid \n• Extract spatial trends",
+                              "• Fit spatial trends to \nenvironmental trends using\nRandom Forest"
                               ),
                      to = c("• Evalute conditional effects",
                             "• Predict on grid \n• Calculate experienced \nenvironmental conditions \nas weighted quantiles",
-                            "• Evalute trends in experienced \nenvironmental conditions \nover time",
-                            "• Predict on grid \n• Extract spatial trends\nin biomass density",
-                            "• Fit spatial trends in biomass \ndensity to environmental \ntrends and velocities using\nRandom Forest",
-                            "• Evaluate variable importance, \nconditional effects, \npartial dependence plots"))
+                            "• Evalute trends in \nexperienced environmental\nconditions over time",
+                            "• Predict on grid \n• Extract spatial trends",
+                            "• Fit spatial trends to \nenvironmental trends using\nRandom Forest",
+                            "• Evaluate variable importance \nand partial dependence plots"))
 
 g = graph_from_data_frame(goldilocks, directed = TRUE)
 coords = layout_as_tree(g)
@@ -68,12 +68,12 @@ ggplot(data = plot_nodes) +
   scale_fill_manual(values = pal) +
   scale_color_manual(values = pal) +
   annotate("text", x = unique(output_df$x)[1], y = max(plot_nodes$ymax) + 0.23,
-           label = "1. Niche dynamics\nover time", fontface = 1, size = 5) +
+           label = "1. Niche dynamics over time", fontface = 1, size = 5) +
   annotate("text", x = unique(output_df$x)[3], y = max(plot_nodes$ymax) + 0.23,
            label = "2. Drivers of biomass\ntrends in space", fontface = 1, size = 5) +
   geom_arrow(data = plot_edges, aes(x = x, y = y, group = id),
-             colour = "gray30", length = 7,
+             colour = "gray30", length = 1,
              arrow_head = arrow_head_wings(offset = 20, inset = 70)) +
   scale_alpha_manual(values = c(0.2, 0.7))
   
-ggsave(paste0(home, "/figures/flow.pdf"), width = 19.5, height = 16, units = "cm", device = cairo_pdf)
+ggsave(paste0(home, "/figures/flow.pdf"), width = 19, height = 15, units = "cm", device = cairo_pdf)

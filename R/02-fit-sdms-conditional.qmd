@@ -45,6 +45,9 @@ home <- here::here()
 ## Read data
 
 ```{r read data}
+#| message: false
+#| warning: false
+
 # Read data
 d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
   add_utm_columns(ll_names = c("lon", "lat")) |> 
@@ -55,6 +58,9 @@ d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
 ## Scale variables
 
 ```{r}
+#| message: false
+#| warning: false
+
 pred_grid <- bind_rows(read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
                        read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
 
@@ -85,6 +91,9 @@ d <- d |>
 Plot residuals, save model object, plot conditional effects!
 
 ```{r}
+#| message: false
+#| warning: false
+
 pred_list <- list()
 pred_grid_list <- list()
 res_list <- list()
@@ -213,7 +222,7 @@ for(i in unique(d$group)) {
     #eao_list[[i]] <- get_eao(grid_p) |> mutate(group = i)
     
     # EAO, the area occupied I can do in plot sdms-conditional
-    index_list[[i]] <- get_index(grid_p) |> mutate(group = i)
+    index_list[[i]] <- get_index(grid_p, area = 3*3) |> mutate(group = i)
 
     
 }
