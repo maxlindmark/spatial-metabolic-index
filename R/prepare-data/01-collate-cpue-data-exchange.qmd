@@ -1072,6 +1072,21 @@ dat <- dat |>
   filter(!(year < 1991 & species == "Psetta maxima")) |> 
   filter(!(year < 1991 & species == "Merlangius merlangus"))
 
+## Time serios of mean cod size for mobai
+mean_size_cod <- dat |>
+  filter(species == "Gadus morhua", density > 0) |>
+  drop_na(length_cm) |>
+  summarise(
+    mean_len = weighted.mean(length_cm, density),
+    .by = year
+  )
+
+plot(mean_size_cod$year, mean_size_cod$mean_len)
+
+write_csv(mean_size_cod, paste0(home, "/data/clean/mean_size_cod.csv"))
+##
+
+
 dat |> 
   summarise(min = min(year), .by = species)
 

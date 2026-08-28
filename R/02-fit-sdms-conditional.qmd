@@ -17,7 +17,7 @@ editor: source
 
 ## Intro
 
-Refit the selected model from "01-fit-sdms-aic.qmd" and plot conditional effects of oxygen and temperature
+Loop through all groups and refit the selected model from "01-fit-sdms-aic.qmd", estimate biomass index and include as SVC. 
 
 ## Load packages & source functions
 
@@ -50,9 +50,9 @@ home <- here::here()
 
 # Read data
 d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
-  add_utm_columns(ll_names = c("lon", "lat")) |> 
-  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "adult")) |> 
-  filter(!group %in% c("whiting_all", "turbot_all"))
+  add_utm_columns(ll_names = c("lon", "lat")) |>
+  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "adult")) |>
+  filter(!group %in% c("whiting_all", "turbot_all", "dab_all"))
 ```
 
 ## Scale variables
@@ -61,30 +61,53 @@ d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
 #| message: false
 #| warning: false
 
-pred_grid <- bind_rows(read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
-                       read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
+pred_grid <- bind_rows(
+  read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+  read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv"))
+)
 
 pred_grid <- pred_grid |>
-  mutate(temp_sc = (temp - mean(temp)) / sd(temp),
-         temp_sq = temp_sc^2,
-         oxy_sc = (oxy - mean(oxy)) / sd(oxy),
-         oxy_sq = oxy_sc^2,
-         sal_sc = (sal - mean(sal)) / sd(sal),
-         depth_sc = (depth - mean(depth)) / sd(depth),
-         depth_sq = depth_sc*depth_sc,
-         month_f = as.factor(month),
-         year_f = as.factor(year))
+  mutate(
+    temp_sc = (temp - mean(temp)) / sd(temp),
+    temp_sq = temp_sc^2,
+    oxy_sc = (oxy - mean(oxy)) / sd(oxy),
+    oxy_sq = oxy_sc^2,
+    sal_sc = (sal - mean(sal)) / sd(sal),
+    depth_sc = (depth - mean(depth)) / sd(depth),
+    depth_sq = depth_sc * depth_sc,
+    month_f = as.factor(month),
+    year_f = as.factor(year)
+  )
 
-d <- d |> 
-  mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
-         temp_sq = temp_sc^2,
-         oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
-         oxy_sq = oxy_sc^2,
-         sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
-         depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
-         depth_sq = depth_sc*depth_sc,
-         month_f = as.factor(month),
-         year_f = as.factor(year))
+d <- d |>
+  mutate(
+    temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
+    temp_sq = temp_sc^2,
+    oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
+    oxy_sq = oxy_sc^2,
+    sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
+    depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
+    depth_sq = depth_sc * depth_sc,
+    month_f = as.factor(month),
+    year_f = as.factor(year)
+  )
+
+# Per-cell temporal min/median/max of temp/oxy (quarter 4), shared across all
+# groups, used to build the low/median/high environment scenario grids below.
+cell_env <- pred_grid |>
+  filter(quarter == 4) |>
+  summarise(
+    sal_sc = median(sal_sc),
+    depth_sc = first(depth_sc),
+    depth_sq = first(depth_sq),
+    temp_sc_min = min(temp_sc),
+    temp_sc_p50 = quantile(temp_sc, 0.5),
+    temp_sc_max = max(temp_sc),
+    oxy_sc_min = min(oxy_sc),
+    oxy_sc_p50 = quantile(oxy_sc, 0.5),
+    oxy_sc_max = max(oxy_sc),
+    .by = c(X, Y)
+  )
 ```
 
 ## Fit the model that is preferred by the given group
@@ -94,163 +117,345 @@ Plot residuals, save model object, plot conditional effects!
 #| message: false
 #| warning: false
 
+fit_one <- function(rhs, priors, dd, mesh, spatial_varying = NULL) {
+  form <- as.formula(paste0(
+    "density ~ 0 + year_f + (1|month_f)",
+    " + sal_sc + depth_sc + depth_sq + ", rhs
+  ))
+  fit <- sdmTMB(form,
+    data = dd,
+    mesh = mesh,
+    family = tweedie(link = "log"),
+    spatiotemporal = "iid",
+    spatial = "on",
+    spatial_varying = spatial_varying,
+    time = "year",
+    priors = priors
+  )
+  run_extra_optimization(fit)
+}
+
+# For making the counterfactual plot, I need to make a prediction. I don't want to
+# have to select a given year, but predict for an average year. Since year_f is fixed,
+# I need to manipulate the TMB object. In addition, I want to predict without epsilon.
+# The approach is to solve for the random effects once using the TRUE b_j (original
+# projection onto the new grid), then modify b_j in that already-solved parameter
+# vector and call report(). report() doesn't optimise anything, so the random effects
+# stay exactly as correctly solved, and only the fixed effect changes.
+# This is validated in R/99-test-param-manipulation.R:
+
+# Helper functions to do this inside the loop:
+counterfactual_components <- function(m, newdata, neutralize_year = TRUE) {
+  tmb_data <- predict(m, newdata = newdata, return_tmb_data = TRUE)
+  obj <- TMB::MakeADFun(
+    data = tmb_data, parameters = get_pars(m),
+    map = m$tmb_map, random = m$tmb_random,
+    DLL = "sdmTMB", silent = TRUE
+  )
+  obj$fn(m$model$par) # solve once, with the TRUE fitted parameters
+  par <- obj$env$last.par.best
+
+  if (neutralize_year) {
+    n_year_terms <- sum(str_starts(tidy(m)$term, "year_f"))
+    b_idx <- which(names(par) == "b_j")[seq_len(n_year_terms)]
+    par[b_idx] <- mean(par[b_idx])
+  }
+
+  rep <- obj$report(par)
+  # Note spatiotemporal random effects are omitted
+  out <- newdata |>
+    mutate(
+      eta_fixed = rep$proj_fe[, 1],
+      omega_s = rep$proj_omega_s_A[, 1],
+      zeta_s = rep$proj_zeta_s_A[, 1, 1]
+    )
+  # Saved here so the code below can reuse this object instead of building and solving it again
+  attr(out, "obj") <- obj
+  out
+}
+
+combine_eta <- function(components, index_sc_val = NULL) {
+  if (is.null(index_sc_val)) index_sc_val <- components$index_sc
+  components |>
+    mutate(
+      index_sc = index_sc_val,
+      # Note spatiotemporal random effects are omitted
+      eta = as.vector(eta_fixed + omega_s + zeta_s * index_sc_val),
+      est = exp(eta)
+    )
+}
+
+# For the simulation-based uncertainty on occupancy transitions (net/gain/loss/turnover), 
+# mirror what predict.sdmTMB(nsim > 0) does
+# draw the joint (fixed + random effect) parameter vector from the joint precision,
+# then report() each draw. comp_median/comp_env_low/comp_env_high share identical fitted
+# parameters (only their proj_* projection matrices differ across newdata grids), so t_draws is
+# drawn once per group and reported through all three objects.
+n_sims <- 500
+
+# This function gets the linear predictor omitting spatiotemporal random effects
+eta_from_report <- function(rep, index_sc_val) {
+  as.vector(rep$proj_fe[, 1] + rep$proj_omega_s_A[, 1] + rep$proj_zeta_s_A[, 1, 1] * index_sc_val)
+}
+
+# Reduces one occupied/not-occupied comparison to summaries, so the 500 gridded predictions are not stored
+occ_delta <- function(occ_from, occ_to) {
+  n_core <- sum(occ_from & occ_to)
+  n_gain <- sum(!occ_from & occ_to)
+  n_loss <- sum(occ_from & !occ_to)
+  from_area <- n_core + n_loss
+  tibble(
+    gain = 100 * n_gain / from_area,
+    loss = 100 * n_loss / from_area,
+    net = 100 * (n_gain - n_loss) / from_area,
+    turnover = 100 * (n_gain + n_loss) / n_core
+  )
+}
+
 pred_list <- list()
 pred_grid_list <- list()
 res_list <- list()
-cog_list <- list()
-#eao_list <- list()
+coef_list <- list()
+scenario_pred_list <- list()
+occupancy_sims_list <- list()
+#cog_list <- list()
+eao_list <- list()
 index_list <- list()
 
-for(i in unique(d$group)) { 
-    
-    dd <- d |> filter(group == i)
+for (i in unique(d$group)) {
+  dd <- d |> filter(group == i)
 
-    # For some combos, there are years without a single occurrence. This makes it hard to fit year_f models...
-    dd <- dd |> 
-      mutate(sum = sum(density), .by = year) |> 
-      filter(sum > 0)
-    
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 12)
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
 
-    ggplot() +
-      inlabru::gg(mesh$mesh) +
-      coord_fixed() +
-      geom_point(aes(X, Y), data = d, alpha = 0.2, size = 0.5) +
-      annotate("text", label = paste(str_to_sentence(unique(dd$life_stage)), unique(dd$common_name)),
-               x = -Inf, y = Inf, vjust = 1.5, hjust = -0.1,
-               color = "gray40", size = 4) + 
-      labs(x = "Easting (km)", y = "Northing (km)")
-    
-    ggsave(paste0(home, paste0("/figures/supp/mesh_", i, ".pdf")), width = 14, height = 14, units = "cm")
-# 
-#     if(i %in% c("plaice_adult")){
-# 
-#       m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
-#                   data = dd,
-#                   mesh = mesh,
-#                   #family = tweedie(link = "log"),
-#                   family = delta_gamma(type = "poisson-link"),
-#                   spatiotemporal = "iid",
-#                   spatial = "on",
-#                   time = "year")
-# 
-#     } else if(i %in% c("cod_juvenile", "dab_all", "flounder_adult", "plaice_juvenile")){
-#       m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
-#                   data = dd,
-#                   mesh = mesh,
-#                   #family = tweedie(link = "log"),
-#                   family = delta_gamma(type = "poisson-link"),
-#                   spatiotemporal = "iid",
-#                   spatial = "on",
-#                   time = "year")
-# 
-#     } else if(i %in% c("flounder_juvenile", "cod_adult")){
+  ggplot() +
+    inlabru::gg(mesh$mesh) +
+    coord_fixed() +
+    geom_point(aes(X, Y), data = d, alpha = 0.2, size = 0.5) +
+    annotate("text",
+      label = paste(str_to_sentence(unique(dd$life_stage)), unique(dd$common_name)),
+      x = -Inf, y = Inf, vjust = 1.5, hjust = -0.1,
+      color = "gray40", size = 4
+    ) +
+    labs(x = "Easting (km)", y = "Northing (km)")
 
-      m <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                  data = dd,
-                  mesh = mesh,
-                  #family = tweedie(link = "log"),
-                  family = delta_gamma(type = "poisson-link"),
-                  spatiotemporal = "iid",
-                  spatial = "on",
-                  time = "year",
-                  priors = sdmTMBpriors(
-                    threshold_breakpt_slope = normal(0, 1),
-                    threshold_breakpt_cut = normal(0, 1)))
+  ggsave(paste0(home, paste0("/figures/supp/mesh_", i, ".pdf")), width = 14, height = 14, units = "cm")
 
-    #  }
-    
-    # Check again to be safe...
-    sanity(m)
+  # Fit the AIC-selected model, estimate a biomass index, refit with index as SVC
+  bundle <- readRDS(paste0(home, "/output/model01_", i, ".rds"))
 
-    # Plot residuals
-    res <- simulate(m, nsim = 300, type = "mle-mvn") |>
-      dharma_residuals(m, plot = FALSE) |>
+  m_base <- fit_one(bundle$rhs, bundle$priors, dd, mesh)
+
+  ind <- get_index(m_base,
+    newdata = pred_grid |> filter(quarter == 4),
+    area = 3 * 3
+  )
+  # Scale instead of just center to make sd of SVC comparable to the scaled fixed effects
+  ind <- ind |> mutate(index_sc = as.vector(scale(log_est)))
+
+  # Add index to data and prediction grid
+  dd_index <- dd |> left_join(ind |> dplyr::select(year, index_sc), by = "year")
+  pred_grid_i <- pred_grid |> left_join(ind |> dplyr::select(year, index_sc), by = "year")
+
+  # Refit model with scaled index as SVC
+  m <- fit_one(bundle$rhs, bundle$priors, dd_index, mesh,
+    spatial_varying = ~ 0 + index_sc
+  )
+
+  # Plot residuals
+  res <- simulate(m, nsim = 300, type = "mle-mvn") |>
+    dharma_residuals(m, plot = FALSE) |>
+    mutate(group = i)
+
+  # Store residuals
+  res_list[[i]] <- res
+
+  # Extract coefficients
+  coef_list[[i]] <- bind_rows(
+    tidy(m) |>
+      filter(!str_starts(term, "year_f")) |>
+      mutate(group = i),
+    tidy(m, effects = "ran_pars") |>
       mutate(group = i)
-    
-    # Store residuals
-    res_list[[i]] <- res
+  )
 
-    # Create prediction dfs for conditional effects
-    nd <- data.frame(expand.grid(temp = seq(min(dd$temp) - 4,
-                                            max(dd$temp) + 4,
-                                            length.out = 50),
-                                 oxy = seq(min(dd$oxy) - 4,
-                                           max(dd$oxy) + 4,
-                                           length.out = 50),
-                                 month = 11)) |>
-      mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
-             temp_sq = temp_sc^2,
-             oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
-             year = min(dd$year),
-             year_f = as.factor(min(dd$year)),
-             month_f = as.factor(month),
-             sal_sc = 0, 
-             depth_sc = 0, depth_sq = 0,
-             X = mean(dd$X),
-             Y = mean(dd$Y),
-             group = i)
+  # Create prediction dfs for conditional effects
+  nd <- data.frame(expand.grid(
+    temp = seq(min(dd$temp) - 4,
+      max(dd$temp) + 4,
+      length.out = 50
+    ),
+    oxy = seq(min(dd$oxy) - 4,
+      max(dd$oxy) + 4,
+      length.out = 50
+    ),
+    month = 11
+  )) |>
+    mutate(
+      temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
+      temp_sq = temp_sc^2,
+      oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
+      year = min(dd$year),
+      year_f = as.factor(min(dd$year)),
+      month_f = as.factor(month),
+      sal_sc = 0,
+      depth_sc = 0, depth_sq = 0,
+      index_sc = 0,
+      X = mean(dd$X),
+      Y = mean(dd$Y),
+      group = i
+    )
 
-    # Predict
-    pred <- predict(m, newdata = nd, re_form = NA, re_form_iid = NA, se_fit = TRUE) |> 
-      mutate(est = as.numeric(est),
-             est_se = as.numeric(est_se))
-             
-    pred_list[[i]] <- pred
+  # Predict
+  pred <- predict(m, newdata = nd, re_form = NA, re_form_iid = NA, se_fit = TRUE) |>
+    mutate(
+      est = as.numeric(est),
+      est_se = as.numeric(est_se)
+    )
 
-    # Predict on grid 
-    p <- predict(m, newdata = pred_grid |> 
-                   filter(year %in% unique(dd$year))
-                 ) |> mutate(group = i)
-    
-    pred_grid_list[[i]] <- p 
-    
-    # Predict on grid and get cog
-    grid_p <- predict(m, newdata = pred_grid |> 
-                        filter(year %in% unique(dd$year) & quarter == 4),
-                      return_tmb_object = TRUE)
-    
-    cog <- get_cog(grid_p, format = "wide") |> mutate(group = i)
-            
-    cog <- cog |>
-      mutate_at(c("est_x", "lwr_x", "upr_x", "est_y", "lwr_y", "upr_y"),
-                ~ . * 1000)
-    
-    cog_list[[i]] <- cog
-    
-    # EAO, the area occupied I can do in plot sdms-conditional
-    #eao_list[[i]] <- get_eao(grid_p) |> mutate(group = i)
-    
-    # EAO, the area occupied I can do in plot sdms-conditional
-    index_list[[i]] <- get_index(grid_p, area = 3*3) |> mutate(group = i)
+  pred_list[[i]] <- pred
 
-    
+  # Predict on grid
+  p <- predict(m, newdata = pred_grid_i) |> mutate(group = i)
+
+  pred_grid_list[[i]] <- p
+
+  # Manipulated predictions for counterfactual scenarios. 
+  index_low <- min(dd_index$index_sc, na.rm = TRUE)
+  index_med <- median(dd_index$index_sc, na.rm = TRUE)
+  index_high <- max(dd_index$index_sc, na.rm = TRUE)
+
+  anchor_year <- min(dd$year) # any real fitted year; its year_f contribution
+  # is chanaged to the mean anyway for the environment/index axes below
+  yf_levels <- levels(dd_index$year_f)
+  mf_levels <- levels(dd_index$month_f)
+
+  make_nd <- function(temp_sc, oxy_sc) {
+    cell_env |>
+      mutate(
+        temp_sc = temp_sc,
+        temp_sq = temp_sc^2,
+        oxy_sc = oxy_sc,
+        year = anchor_year,
+        year_f = factor(anchor_year, levels = yf_levels),
+        month = 11,
+        month_f = factor(11, levels = mf_levels),
+        index_sc = 0 # placeholder only: needed for model.frame() to build
+        # tmb_data (the SVC formula references index_sc), but its value here
+        # is never used. eta is recomputed from zeta_s * the real index_sc
+        # values afterward, via combine_eta()
+      )
+  }
+
+  comp_median <- counterfactual_components(m, make_nd(cell_env$temp_sc_p50, cell_env$oxy_sc_p50))
+  comp_env_low <- counterfactual_components(m, make_nd(cell_env$temp_sc_max, cell_env$oxy_sc_min))
+  comp_env_high <- counterfactual_components(m, make_nd(cell_env$temp_sc_min, cell_env$oxy_sc_max))
+
+  scenario_pred <- bind_rows(
+    combine_eta(comp_median, index_med) |> mutate(scenario = "environment", level = "median"),
+    combine_eta(comp_env_low, index_med) |> mutate(scenario = "environment", level = "low"),
+    combine_eta(comp_env_high, index_med) |> mutate(scenario = "environment", level = "high"),
+    combine_eta(comp_median, index_med) |> mutate(scenario = "index", level = "median"),
+    combine_eta(comp_median, index_low) |> mutate(scenario = "index", level = "low"),
+    combine_eta(comp_median, index_high) |> mutate(scenario = "index", level = "high"),
+    combine_eta(comp_median, index_med) |> mutate(scenario = "joint", level = "median"),
+    combine_eta(comp_env_low, index_low) |> mutate(scenario = "joint", level = "low"),
+    combine_eta(comp_env_high, index_high) |> mutate(scenario = "joint", level = "high")
+  ) |>
+    mutate(group = i)
+
+  scenario_pred_list[[i]] <- scenario_pred
+
+  # Simulation-based uncertainty on the occupancy transitions (net/gain/loss/turnover).
+  # comp_median/env_low/env_high are the same fitted model projected onto different grids, 
+  # (the t_draws is the same for all three and used in $report)
+  obj_median <- attr(comp_median, "obj")
+  obj_env_low <- attr(comp_env_low, "obj")
+  obj_env_high <- attr(comp_env_high, "obj")
+
+  # Get SEs of fitted model
+  sd_report_joint <- m$sd_report
+
+  # Draw simulated parameter estimates
+  t_draws <- sdmTMB:::rmvnorm_prec(
+    mu = obj_median$env$last.par.best, tmb_sd = sd_report_joint, n_sims = n_sims
+  )
+
+  # Change year_f to mean in every draw the same way as the point estimate
+  # (average across year_f within that draw, not the point estimate's mean)
+  n_year_terms <- sum(str_starts(tidy(m)$term, "year_f"))
+  b_idx <- which(names(obj_median$env$last.par.best) == "b_j")[seq_len(n_year_terms)]
+  col_means <- colMeans(t_draws[b_idx, , drop = FALSE])
+  t_draws[b_idx, ] <- rep(col_means, each = length(b_idx))
+
+  draws <- purrr::array_branch(t_draws, margin = 2)
+  rep_median <- purrr::map(draws, obj_median$report)
+  rep_env_low <- purrr::map(draws, obj_env_low$report)
+  rep_env_high <- purrr::map(draws, obj_env_high$report)
+
+  occupancy_sims_list[[i]] <- purrr::map_dfr(seq_len(n_sims), function(s) {
+    # Threshold recomputed per draw (5% of max)
+    est_median_s <- exp(eta_from_report(rep_median[[s]], index_med))
+    thresh_s <- 0.05 * max(est_median_s)
+
+    est_env_low_s <- exp(eta_from_report(rep_env_low[[s]], index_med))
+    est_env_high_s <- exp(eta_from_report(rep_env_high[[s]], index_med))
+    est_index_low_s <- exp(eta_from_report(rep_median[[s]], index_low))
+    est_index_high_s <- exp(eta_from_report(rep_median[[s]], index_high))
+
+    bind_rows(
+      occ_delta(est_env_high_s >= thresh_s, est_env_low_s >= thresh_s) |>
+        mutate(scenario = "environment"),
+      occ_delta(est_index_low_s >= thresh_s, est_index_high_s >= thresh_s) |>
+        mutate(scenario = "index")
+    ) |>
+      mutate(sim_index = s)
+  }) |>
+    mutate(group = i)
+
+  # Estimate index, cog and eao
+  nd_real <- pred_grid_i |> filter(year %in% unique(dd$year) & quarter == 4)
+
+  index_list[[i]] <- get_index(m, newdata = nd_real, area = 3 * 3) |>
+    mutate(group = i)
+
+  # cog_list[[i]] <- get_cog(m, newdata = nd_real, format = "wide") |>
+  #   mutate_at(c("est_x", "lwr_x", "upr_x", "est_y", "lwr_y", "upr_y"), ~ . * 1000) |>
+  #   mutate(group = i)
+
+  eao_list[[i]] <- get_eao(m, newdata = nd_real) |>
+    mutate(group = i)
 }
 
 # Save predictions
 preds <- dplyr::bind_rows(pred_list)
 preds_grid <- dplyr::bind_rows(pred_grid_list)
 res <- dplyr::bind_rows(res_list)
-cogs <- dplyr::bind_rows(cog_list)
-#eaos <- dplyr::bind_rows(eao_list)
+coef <- dplyr::bind_rows(coef_list)
+scenario_preds <- dplyr::bind_rows(scenario_pred_list)
+occupancy_sims <- dplyr::bind_rows(occupancy_sims_list)
 index <- dplyr::bind_rows(index_list)
+#cogs <- dplyr::bind_rows(cog_list)
+eaos <- dplyr::bind_rows(eao_list)
 ```
 
 ```{r}
 write_csv(res, paste0(home, "/output/residuals_02_sdms.csv"))
 write_csv(preds, paste0(home, "/output/conditional_02_sdms.csv"))
 write_csv(preds_grid, paste0(home, "/output/pred_grids_02_sdms.csv"))
-write_csv(cogs, paste0(home, "/output/cogs_02_sdms.csv"))
-#write_csv(eaos, paste0(home, "/output/eaos_02_sdms.csv"))
+write_csv(coef, paste0(home, "/output/coefs_02_sdms.csv"))
+write_csv(scenario_preds, paste0(home, "/output/scenario_preds_02_sdms.csv"))
+write_csv(occupancy_sims, paste0(home, "/output/occupancy_sims_02_sdms.csv"))
 write_csv(index, paste0(home, "/output/index_02_sdms.csv"))
+#write_csv(cogs, paste0(home, "/output/cogs_02_sdms.csv"))
+write_csv(eaos, paste0(home, "/output/eaos_02_sdms.csv"))
 ```
 
 ## Plot residuals
 
 ```{r}
 # Plot residuals
-res |> 
-  separate(group, into = c("common_name", "life_stage"), sep = "_", remove = FALSE) |> 
+res |>
+  separate(group, into = c("common_name", "life_stage"), sep = "_", remove = FALSE) |>
   mutate(group2 = paste(str_to_sentence(life_stage), common_name)) |>
   ggplot(aes(observed, expected)) +
   geom_point(color = "grey30", shape = 21, size = 0.5) +
@@ -261,3 +466,8 @@ res |>
 
 ggsave(paste0(home, "/figures/supp/qq_sdm_02.pdf"), width = 17, height = 14, units = "cm")
 ```
+
+```{r}
+knitr::knit_exit()
+```
+

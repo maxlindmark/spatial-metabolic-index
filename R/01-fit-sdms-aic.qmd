@@ -53,24 +53,27 @@ home <- here::here()
 
 # Read data
 d <- read_csv(paste0(home, "/data/clean/catch_clean.csv")) |>
-  add_utm_columns(ll_names = c("lon", "lat")) |> 
-  mutate(life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "all"),
-         life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage))
+  add_utm_columns(ll_names = c("lon", "lat")) |>
+  mutate(
+    life_stage = ifelse(str_ends(group, "juvenile"), "juvenile", "all"),
+    life_stage = ifelse(str_ends(group, "adult"), "adult", life_stage)
+  )
 
 # Read metabolic parameter estimates and left_join
-mi_pars <- read_csv(paste0(home, "/data/clean/mi_params.csv")) 
+mi_pars <- read_csv(paste0(home, "/data/clean/mi_params.csv"))
 
-mi_pars <- mi_pars |> 
-  rename(common_name = species) |> 
+mi_pars <- mi_pars |>
+  rename(common_name = species) |>
   mutate(A_0 = ifelse(common_name == "flounder",
-                      filter(mi_pars, common_name == "plaice")$A_0,
-                      A_0))
+    filter(mi_pars, common_name == "plaice")$A_0,
+    A_0
+  ))
 
 d <- left_join(d, mi_pars, by = "common_name")
 
 # Read size csv to calculate the metabolic index
 sizes <- read_csv(paste0(home, "/data/clean/sizes.csv")) |>
-  mutate(group = paste(common_name, life_stage, sep = "_")) |> 
+  mutate(group = paste(common_name, life_stage, sep = "_")) |>
   dplyr::select(group, B, species)
 
 d <- tidylog::left_join(d, sizes, by = "group")
@@ -92,8 +95,10 @@ t_ref <- 15 # arbitrary reference temperature
 
 # Calculate the metabolic index
 d <- d |>
-  mutate(inv_temp = (1/(temp + 273.15) - 1/(t_ref + 273.15)),
-         phi = A_0*(B^n)*oxy_si * exp((E/kb)*inv_temp))
+  mutate(
+    inv_temp = (1 / (temp + 273.15) - 1 / (t_ref + 273.15)),
+    phi = A_0 * (B^n) * oxy_si * exp((E / kb) * inv_temp)
+  )
 ```
 
 ## Scale variables
@@ -102,19 +107,36 @@ d <- d |>
 #| message: false
 #| warning: false
 
-pred_grid <- bind_rows(readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
-                       readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv")))
+pred_grid <- bind_rows(
+  readr::read_csv(paste0(home, "/data/clean/pred_grid_(1_2).csv")),
+  readr::read_csv(paste0(home, "/data/clean/pred_grid_(2_2).csv"))
+)
 
-d <- d |> 
-  mutate(temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
-         temp_sq = temp_sc^2,
-         oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
-         oxy_sq = oxy_sc^2,
-         sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
-         depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
-         depth_sq = depth_sc*depth_sc,
-         month_f = as.factor(month),
-         year_f = as.factor(year)) |> 
+pred_grid <- pred_grid |>
+  mutate(
+    temp_sc = (temp - mean(temp)) / sd(temp),
+    temp_sq = temp_sc^2,
+    oxy_sc = (oxy - mean(oxy)) / sd(oxy),
+    oxy_sq = oxy_sc^2,
+    sal_sc = (sal - mean(sal)) / sd(sal),
+    depth_sc = (depth - mean(depth)) / sd(depth),
+    depth_sq = depth_sc * depth_sc,
+    month_f = as.factor(month),
+    year_f = as.factor(year)
+  )
+
+d <- d |>
+  mutate(
+    temp_sc = (temp - mean(pred_grid$temp)) / sd(pred_grid$temp),
+    temp_sq = temp_sc^2,
+    oxy_sc = (oxy - mean(pred_grid$oxy)) / sd(pred_grid$oxy),
+    oxy_sq = oxy_sc^2,
+    sal_sc = (sal - mean(pred_grid$sal)) / sd(pred_grid$sal),
+    depth_sc = (depth - mean(pred_grid$depth)) / sd(pred_grid$depth),
+    depth_sq = depth_sc * depth_sc,
+    month_f = as.factor(month),
+    year_f = as.factor(year)
+  ) |>
   mutate(phi_sc = as.vector(scale(phi)), .by = group) # don't scale this across a common value because it varies by species
 
 # Based on poor model fit due to infrequent observations, I drop these
@@ -125,22 +147,28 @@ d <- d |> filter(!group %in% c("whiting_all", "turbot_all", "dab_all"))
 #| message: false
 #| warning: false
 
-order <- c("Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
-           "Plaice Adult", "Plaice Juvenile")
+order <- c(
+  "Cod Adult", "Cod Juvenile", "Flounder Adult", "Flounder Juvenile",
+  "Plaice Adult", "Plaice Juvenile"
+)
 
-d |> 
-  mutate(life_stage = str_to_sentence(life_stage),
-         group2 = paste(str_to_sentence(common_name), str_to_sentence(life_stage)),
-         group2 = factor(group2, levels = order)) |> 
-  ggplot(aes(phi, fill = group2, color = group2)) + 
-  geom_density(alpha = 0.2) + 
-  geom_vline(xintercept = 1, linetype = 2) + 
-  coord_cartesian(expand = 0) + 
-  facet_wrap(~ life_stage, ncol = 1) +
-  theme(legend.position = "bottom",
-        legend.key.size = unit(0.4, "cm"),
-        legend.title = element_blank()) +
-  labs(x = "Metabolic index (\u03C6)", y = "Density", fill = "Species", color = "Species") + 
+d |>
+  mutate(
+    life_stage = str_to_sentence(life_stage),
+    group2 = paste(str_to_sentence(common_name), str_to_sentence(life_stage)),
+    group2 = factor(group2, levels = order)
+  ) |>
+  ggplot(aes(phi, fill = group2, color = group2)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  coord_cartesian(expand = 0) +
+  facet_wrap(~life_stage, ncol = 1) +
+  theme(
+    legend.position = "bottom",
+    legend.key.size = unit(0.4, "cm"),
+    legend.title = element_blank()
+  ) +
+  labs(x = "Metabolic index (\u03C6)", y = "Density", fill = "Species", color = "Species") +
   scale_color_brewer(palette = "Paired") +
   scale_fill_brewer(palette = "Paired") +
   NULL
@@ -154,121 +182,84 @@ ggsave(paste0(home, "/figures/supp/mi_density.pdf"), width = 13, height = 16, un
 #| message: false
 #| warning: false
 
+# One candidate model per row
+breakpt_priors <- sdmTMBpriors(
+  threshold_breakpt_slope = normal(0, 1),
+  threshold_breakpt_cut = normal(0, 1)
+)
+
+model_specs <- list(
+  m0 = list(rhs = "temp_sc + oxy_sc", priors = sdmTMBpriors()),
+  m1 = list(rhs = "temp_sc + temp_sq + oxy_sc", priors = sdmTMBpriors()),
+  m2 = list(rhs = "temp_sc * oxy_sc", priors = sdmTMBpriors()),
+  m3 = list(rhs = "temp_sc + temp_sq + breakpt(oxy_sc)", priors = breakpt_priors),
+  m4 = list(rhs = "phi_sc", priors = sdmTMBpriors()),
+  m5 = list(rhs = "breakpt(phi_sc)", priors = breakpt_priors)
+)
+
+fit_one <- function(rhs, priors, dd, mesh, spatial_varying = NULL) {
+  form <- as.formula(paste0(
+    "density ~ 0 + year_f + (1|month_f)",
+    " + sal_sc + depth_sc + depth_sq + ", rhs
+  ))
+  fit <- sdmTMB(form,
+    data = dd,
+    mesh = mesh,
+    family = tweedie(),
+    spatiotemporal = "iid",
+    spatial = "on",
+    spatial_varying = spatial_varying,
+    time = "year",
+    priors = priors
+  )
+  run_extra_optimization(fit)
+}
+
 data_list_aic <- list()
+san_list <- list()
 
-for(i in unique(d$group)) {  
-    
-    dd <- d |> filter(group == i)
-    
-    # For some combos, there are years without a single occurrence. This makes it hard to fit year_f models...
-    dd <- dd |> 
-      mutate(sum = sum(density), .by = year) |> 
-      filter(sum > 0)
-    
-    plot_map_fc + 
-      geom_point(data = dd |> mutate(pres = ifelse(density == 0, "0", "1")),
-                 aes(X*1000, Y*1000, color = pres)) +
-      facet_wrap(~year)
-    
-    mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 12)
-    
-    print(
-    ggplot() +
-      inlabru::gg(mesh$mesh) +
-      coord_fixed() +
-      geom_point(aes(X, Y), data = dd, alpha = 0.2, size = 0.5) +
-      labs(x = "Easting (km)", y = "Northing (km)", title = str_to_sentence(str_replace(i, "_", " ")))
-    )
-    
-    print(i)
-    
-    # 0. Linear oxygen and temperature
-    m0 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + oxy_sc,
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(type = "poisson-link"),
-                 spatiotemporal = "iid",
-                 spatial = "on",
-                 time = "year")
-    print("m0")
-    sanity(m0)
-    
-    # 1. Linear oxygen and squared temperature
-    m1 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + oxy_sc,
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(type = "poisson-link"),
-                 spatiotemporal = "iid",
-                 spatial = "on",
-                 time = "year")
-    print("m1")
-    sanity(m1)
-    
-    # 2. Interaction between linear oxygen and temperature
-    m2 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc * oxy_sc,
-                  data = dd,
-                  mesh = mesh,
-                  family = delta_gamma(type = "poisson-link"),
-                  spatiotemporal = "iid",
-                  spatial = "on",
-                  time = "year")
-    print("m2")
-    sanity(m2)
+for (i in unique(d$group)) {
+  dd <- d |> filter(group == i)
 
-    # 3. Breakpoint oxygen
-    m3 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + temp_sc + temp_sq + breakpt(oxy_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(type = "poisson-link"),
-                 spatiotemporal = "iid",
-                 spatial = "on",
-                 time = "year",
-                 priors = sdmTMBpriors(
-                   threshold_breakpt_slope = normal(0, 1),
-                   threshold_breakpt_cut = normal(0, 1)))
-    print("m3")
-    sanity(m3)
-    
-    # 4. linear metabolic index
-    m4 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + phi_sc,
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(type = "poisson-link"),
-                 spatiotemporal = "iid",
-                 spatial = "on",
-                 time = "year")
-    print("m4")
-    sanity(m4)
+  mesh <- make_mesh(dd, xy_cols = c("X", "Y"), cutoff = 15)
 
-    # 5. breakpoint metabolic index!
-    m5 <- sdmTMB(density ~ 0 + year_f + (1|month_f) + sal_sc + depth_sc + depth_sq + breakpt(phi_sc),
-                 data = dd,
-                 mesh = mesh,
-                 family = delta_gamma(type = "poisson-link"),
-                 spatiotemporal = "iid",
-                 spatial = "on",
-                 time = "year",
-                 priors = sdmTMBpriors(
-                   threshold_breakpt_slope = normal(0, 1),
-                   threshold_breakpt_cut = normal(0, 1)))
-                 
-    print("m5")
-    sanity(m5)
-    
-    # Save AIC
-    AIC(m0, m1, m2, m3, m4, m5) |>
-      tibble::rownames_to_column("model") |> 
-      arrange(AIC)
-    
-    data_list_aic[[i]] <- AIC(m0, m1, m2, m3, m4, m5) |>
-      tibble::rownames_to_column("model") |>
-      mutate(group = i)
-    
+  fits <- purrr::imap(model_specs, function(spec, model_name) {
+    print(paste(i, model_name))
+    fit_one(spec$rhs, spec$priors, dd, mesh)
+  })
+
+  san_i <- purrr::map(fits, sdmTMB::sanity, silent = TRUE)
+
+  # Save AIC
+  aic_tbl <- tibble::tibble(
+    model = names(fits),
+    AIC = purrr::map_dbl(fits, AIC)
+  ) |>
+    arrange(AIC)
+
+  data_list_aic[[i]] <- aic_tbl |> mutate(group = i)
+
+  san_list[[i]] <- purrr::imap_dfr(san_i, ~ as_tibble(.x) |> mutate(model = .y)) |>
+    mutate(group = i)
+
+  # Save what's needed to refit the AIC-winning model fresh in 02 (no model
+  # object itself, since it's always refit rather than reloaded)
+  best_name <- aic_tbl$model[1]
+  saveRDS(
+    list(
+      rhs = model_specs[[best_name]]$rhs,
+      priors = model_specs[[best_name]]$priors
+    ),
+    paste0(home, "/output/model01_", i, ".rds")
+  )
 }
 
 # Save aic as data frames
 data_aic <- bind_rows(data_list_aic)
+san <- bind_rows(san_list)
+
+san |> as.data.frame()
 
 write_csv(data_aic, paste0(home, "/output/data_aic_01.csv"))
+write_csv(san, paste0(home, "/output/sanity_01.csv"))
 ```
-

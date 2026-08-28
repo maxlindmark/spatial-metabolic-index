@@ -133,54 +133,6 @@ ggplot() +
 #| message: false
 #| warnings: false
 
-# d |>
-#   filter(species == "Gadus morhua") |>
-#   filter(year %in% c(1993, 2003, 2011, 2021)) |>
-#   filter(density > 0) |>
-#   mutate(density_round = round(density)) |>
-#   uncount(density_round) |>
-#   ggplot(aes(length_class, fill = as.factor(year), color = as.factor(year))) +
-#   geom_density(fill = NA)
-# 
-# library(ggridges)
-# library(RColorBrewer)
-# library(viridis)
-# 
-# d |>
-#   filter(species == "Gadus morhua") |>
-#   filter(year %in% c(1993, 2003, 2011, 2021)) |>
-#   filter(density > 0) |>
-#   mutate(density_round = round(density)) |>
-#   uncount(density_round) |>
-#   ggplot(aes(x = length_class, y = as.factor(year),
-#              fill = after_stat(x > 35))) +
-#   theme_sleek(base_size = 17) +
-#   geom_density_ridges_gradient(scale = 1, alpha = 0.2) +
-#   scale_y_discrete(expand = c(0, 0), limits = rev) +
-#   scale_x_continuous(expand = c(0, 0)) +
-#   guides(fill = "none", color = "none") +
-#   labs(y = "Year", x = "Length (cm)") +
-#   scale_fill_manual(values = c("gray80", "skyblue")) +
-#   NULL
-# 
-# ggsave(paste0(home, "/figures/NV/spatial_trends.pdf"), width = 13, height = 12, units = "cm")
-# d |> 
-#   filter(species == "Gadus morhua") |> 
-#   filter(density > 0) |> 
-#   summarise(lwr = quantile(length_class, prob = 0.25),
-#             median = quantile(length_class, prob = 0.5),
-#             upr = quantile(length_class, prob = 0.75),
-#             .by = c(year, species)) |> 
-#   pivot_longer(c(-year, -species)) |> 
-#   ggplot(aes(year, value, linetype = name)) +  
-#   geom_line() + 
-#   facet_wrap(~species, scales = "free")
-```  
-
-```{r}
-#| message: false
-#| warnings: false
-
 # Add in maturity stage
 unique(d$species)
 
