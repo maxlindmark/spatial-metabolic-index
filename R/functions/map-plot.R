@@ -52,7 +52,7 @@ plot_map <-
   xlim(xmin2, xmax2) +
   ylim(ymin2, ymax2) +
   labs(x = "Longitude", y = "Latitude") +
-  geom_sf(size = 0.3, color = "gray30") + 
+  geom_sf(size = 0.2, color = "grey80") + 
   theme_sleek() +
   guides(colour = guide_colorbar(title.position = "top", title.hjust = 0.5),
          fill = guide_colorbar(title.position = "top", title.hjust = 0.5)) +
@@ -63,7 +63,7 @@ plot_map_fc <-
   xlim(xmin2, xmax2) +
   ylim(ymin2, ymax2) +
   labs(x = "Longitude", y = "Latitude") +
-  geom_sf(size = 0.3, color = "gray30") + 
+  geom_sf(size = 0.2, color = "grey80") + 
   theme_facet_map() +
   guides(colour = guide_colorbar(title.position = "top", title.hjust = 0.5),
          fill = guide_colorbar(title.position = "top", title.hjust = 0.5)) +
